@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>窗贴 Sheet Workbench</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <span class="eyebrow">WINDOW STICKER / SHEET NESTING</span>
+      <h1>窗贴 Sheet Workbench</h1>
+    </div>
+    <div class="top-actions">
+      <span id="provider-status" class="provider">检查生图配置…</span>
+      <button id="load-jobs" class="ghost">历史任务</button>
+    </div>
+  </header>
+
+  <main class="shell">
+    <aside class="sidebar">
+      <form id="job-form">
+        <section class="panel-block">
+          <div class="section-title"><span>01</span>输入</div>
+          <div class="segmented" id="input-mode">
+            <button type="button" data-value="master" class="active">纯色母版</button>
+            <button type="button" data-value="alpha">透明 PNG</button>
+            <button type="button" data-value="source">电商原图</button>
+          </div>
+          <small class="mode-note" id="input-mode-note">从纯色背景计算 Alpha。</small>
+          <label class="dropzone">
+            <input id="file" type="file" accept="image/png,image/jpeg,image/webp" required>
+            <span class="drop-icon">＋</span>
+            <strong>选择或拖入图片</strong>
+            <small id="file-name">PNG / JPG / WEBP · 最大 20MB</small>
+          </label>
+          <details id="prompt-details" hidden>
+            <summary>编辑生图 Prompt</summary>
+            <textarea id="generation-prompt" rows="8"></textarea>
+          </details>
+        </section>
+
+        <section class="panel-block">
+          <div class="section-title"><span>02</span>物理规格</div>
+          <div class="field-grid two">
+            <label>安装宽 mm<input data-setting="install_width_mm" type="number" min="10" step="1"></label>
+            <label>安装高 mm<input data-setting="install_height_mm" type="number" min="10" step="1"></label>
+            <label>Sheet 宽 mm<input data-setting="sheet_width_mm" type="number" min="20" step="0.1"></label>
+            <label>Sheet 高 mm<input data-setting="sheet_height_mm" type="number" min="20" step="0.1"></label>
+          </div>
+          <div class="field-grid three">
+            <label>页边距<input data-setting="sheet_margin_mm" type="number" min="0" step="0.1"></label>
+            <label>裁切外扩<input data-setting="cut_offset_mm" type="number" min="0" step="0.1"></label>
+            <label>贴纸间距<input data-setting="spacing_mm" type="number" min="0" step="0.1"></label>
+          </div>
+        </section>
+
+        <section class="panel-block">
+          <div class="section-title"><span>03</span><i id="key-settings-title">色键与组件</i></div>
+          <div class="field-grid two">
+            <label>背景低阈值<input data-setting="key_low" type="number" min="0" max="255" step="1"></label>
+            <label>背景高阈值<input data-setting="key_high" type="number" min="1" max="441" step="1"></label>
+            <label>最小组件 px<input data-setting="min_component_area" type="number" min="1" step="1"></label>
+            <label>合并距离 mm<input data-setting="group_gap_mm" type="number" min="0" step="0.1"></label>
+          </div>
+        </section>
+
+        <section class="panel-block">
+          <div class="section-title"><span>04</span>排版与评分</div>
+          <div class="field-grid two">
+            <label>排版模式
+              <select data-setting="layout_mode" data-setting-type="string">
+                <option value="tidy_compact">整齐紧凑</option>
+              </select>
+            </label>
+            <label>最大缩小 %<input data-setting="max_shrink_ratio" data-setting-transform="percent" type="number" min="0" max="15" step="1"></label>
+          </div>
+          <label class="check-row"><input data-setting="auto_shrink_enabled" type="checkbox"> 减少页数时允许统一缩小</label>
+          <div class="range-row">
+            <label>紧凑度权重 <output id="compactness-output">65%</output></label>
+            <input id="compactness-weight" data-setting="compactness_weight" type="range" min="0" max="1" step="0.05">
+          </div>
+          <div class="range-row">
+            <label>整齐度权重 <output id="alignment-output">25%</output></label>
+            <input id="alignment-weight" data-setting="alignment_weight" type="range" min="0" max="1" step="0.05">
+          </div>
+          <div class="range-row">
+            <label>视觉平衡权重 <output id="balance-output">10%</output></label>
+            <input id="balance-weight" data-setting="balance_weight" type="range" min="0" max="1" step="0.05">
+          </div>
+        </section>
+
+        <button class="primary large" id="create-run" type="submit">创建并运行完整链路 <span>→</span></button>
+      </form>
+    </aside>
+
+    <section class="workspace">
+      <div class="workspace-head">
+        <div>
+          <span id="status" class="status idle">等待输入</span>
+          <strong id="job-title">尚未创建任务</strong>
+          <p id="job-note">每一步的输入、输出、参数和日志都会保存。</p>
+        </div>
+        <div class="workspace-actions">
+          <select id="through-stage" aria-label="运行到阶段">
+            <option value="key" id="key-stage-option">运行到色键</option>
+            <option value="components">运行到组件</option>
+            <option value="geometry">运行到轮廓</option>
+            <option value="layout" selected>运行到排版</option>
+          </select>
+          <button id="rerun" class="secondary" disabled>按当前参数重跑</button>
+          <a id="download" class="primary disabled" href="#">下载全部 ZIP</a>
+        </div>
+      </div>
+
+      <nav class="stepper" id="stepper">
+        <button data-stage="input" class="active"><b>1</b><span>输入</span></button>
+        <button data-stage="generate"><b>2</b><span>母版</span></button>
+        <button data-stage="key"><b>3</b><span id="key-step-label">色键</span></button>
+        <button data-stage="components"><b>4</b><span>组件</span></button>
+        <button data-stage="geometry"><b>5</b><span>轮廓</span></button>
+        <button data-stage="layout"><b>6</b><span>候选</span></button>
+      </nav>
+
+      <section id="empty" class="empty-state">
+        <div class="empty-graphic"><i></i><i></i><i></i></div>
+        <h2>把每一步都摊开来看</h2>
+        <p>上传纯绿底母版可直接调试算法；上传电商图则先调用生图服务重建母版。</p>
+      </section>
+
+      <section id="stage-view" hidden>
+        <div class="stage-header">
+          <div><span id="stage-kicker">STEP</span><h2 id="stage-title">输入</h2></div>
+          <button id="run-stage" class="secondary">只运行到这一步</button>
+        </div>
+        <div id="artifact-grid" class="artifact-grid"></div>
+        <div id="component-workbench" class="component-workbench" hidden>
+          <div class="canvas-panel">
+            <div class="subhead"><strong>分组覆盖层</strong><span>点击框选；Shift 可多选</span></div>
+            <canvas id="group-canvas"></canvas>
+          </div>
+          <div class="group-panel">
+            <div class="group-actions">
+              <button data-group-action="merge">合并所选</button>
+              <button data-group-action="ungroup">取消分组</button>
+              <button data-group-action="delete">删除</button>
+              <button data-group-action="restore">恢复</button>
+            </div>
+            <div id="selection-options" class="selection-options">
+              <label><input id="group-rotatable" type="checkbox"> 允许旋转</label>
+              <label><input id="group-filler" type="checkbox"> 允许填缝复制</label>
+              <label>最多复制 <input id="group-copies" type="number" min="0" max="10" value="2"></label>
+              <button id="save-group-options">保存属性</button>
+            </div>
+            <div id="group-list" class="group-list"></div>
+          </div>
+        </div>
+        <div id="candidate-grid" class="candidate-grid" hidden></div>
+      </section>
+
+      <section id="log-panel" class="log-panel" hidden>
+        <div class="subhead"><strong>运行日志</strong><button id="toggle-log">收起</button></div>
+        <pre id="logs"></pre>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="history-dialog">
+    <div class="dialog-head"><h2>最近任务</h2><button id="close-history">×</button></div>
+    <div id="history-list" class="history-list"></div>
+  </dialog>
+
+  <div id="toast" class="toast"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
