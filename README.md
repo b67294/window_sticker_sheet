@@ -19,16 +19,29 @@ C:\Users\melonedoe\miniconda3\python.exe -m pip install -r requirements.txt
 
 打开 <http://127.0.0.1:8790>。
 
-## 生图配置
+## 生图与语义分组配置
 
-“透明 PNG”和“直接上传纯色母版”不需要任何服务配置。“电商原图”模式需要在启动前设置：
+推荐使用统一的 OpenAI 兼容接口：同一个 endpoint 和 client key 同时供 `gpt-image-2` 生图及 `codex-gpt-5.6-luna` 语义分组使用。图片以 data URL 内联，不需要先上传图云：
 
 ```powershell
-$env:LP_AI_BASE_URL="https://your-host/v1/chat/completions"
-$env:LP_AI_TOKEN="your-token"
+$env:LP_IMAGE_PROVIDER="chat_compat"
+$env:LP_COMPAT_BASE_URL="https://test-plugin.longpean.com/v1/chat/completions"
+$env:LP_COMPAT_TOKEN="your-client-key"
 ```
 
-可选变量见 `.env.example`。Token 只由后端读取，不会返回给浏览器或写入任务文件。
+视觉语义分组默认复用上述 key，模型可单独设置：
+
+```powershell
+$env:LP_VISION_MODEL="codex-gpt-5.6-luna"
+```
+
+也可以写入项目根目录中已被 Git 忽略的 `.env`。可选变量见 `.env.example`。Token 只由后端读取，不会返回给浏览器或写入任务文件。
+
+备用的 `LP_IMAGE_PROVIDER=direct` 会调用 `/gptImage/generateImageDirect`，但它只接受远端 HTTP 参考图，必须先上传 Longpean 图云；统一兼容接口更适合本地 Workbench。
+
+如果兼容接口的 `gpt-image-2` 响应返回 `192.168.x.x` 等本机不可达的内网图片 URL，需暂时切换到 `direct`。这只影响生图链路；语义分组仍使用 `LP_COMPAT_BASE_URL` 和同一个授权码。根治方式是让网关将内部文件地址改写为公网 URL，或由网关代理图片下载。
+
+`gpt-image-2` 插件不提供原生 Alpha；系统要求模型输出纯 `#ff00ff` 背景，再由本地色键生成透明 PNG。图片接口实际输出受约 1.57M 像素预算限制，配置 2K/4K 仍可能被服务端降采样。
 
 ## 调试流程
 

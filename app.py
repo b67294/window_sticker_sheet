@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import shutil
 import threading
 import time
@@ -16,8 +17,28 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+
+def _load_local_env(path: Path) -> None:
+    """Load the git-ignored project .env without ever returning its secrets to clients."""
+    if not path.is_file():
+        return
+    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip()
+        if value[:1] == value[-1:] and value.startswith(("'", '"')):
+            value = value[1:-1]
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_load_local_env(Path(__file__).resolve().with_name(".env"))
+
 import pipeline
-from generation import DEFAULT_PROMPT, generate_master
+from generation import DEFAULT_PROMPT, generate_master, generation_configured
+from semantic_grouping import infer_and_apply_semantic_groups, semantic_grouping_configured
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -135,6 +156,7 @@ def clear_from(job: dict[str, Any], stage: str) -> None:
     if "components" in invalid:
         job["primitives"] = []
         job["groups"] = []
+        job["semantic_grouping"] = None
     if "geometry" in invalid:
         job["geometry"] = []
     if "layout" in invalid:
@@ -203,9 +225,31 @@ def execute_job(job_id: str, through_stage: str, from_stage: str | None = None) 
             stage_started = time.perf_counter()
             clear_from(job, "components")
             artifacts, primitives, groups = pipeline.run_components(job, directory, settings)
+            semantic_metadata: dict[str, Any] | None = None
+            if settings.get("semantic_grouping_enabled", True) and semantic_grouping_configured():
+                semantic_started = time.perf_counter()
+                try:
+                    semantic_artifacts, groups, semantic_metadata = infer_and_apply_semantic_groups(
+                        directory, primitives, groups, settings
+                    )
+                    artifacts.extend(_artifact_from_external("components", item, directory) for item in semantic_artifacts)
+                    (directory / "components" / "groups.json").write_text(
+                        json.dumps(groups, ensure_ascii=False, indent=2), encoding="utf-8"
+                    )
+                    job.setdefault("logs", []).append(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] 语义分组完成，用时 {time.perf_counter() - semantic_started:.2f}s，应用 {semantic_metadata['applied_count']} 条关系"
+                    )
+                except Exception as semantic_error:
+                    semantic_metadata = {"status": "failed", "error": str(semantic_error)}
+                    job.setdefault("logs", []).append(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] 语义分组失败，保留距离分组：{semantic_error}"
+                    )
+            elif settings.get("semantic_grouping_enabled", True):
+                semantic_metadata = {"status": "skipped", "reason": "not_configured"}
             pipeline.replace_stage_artifacts(job, "components", artifacts)
             job["primitives"] = primitives
             job["groups"] = groups
+            job["semantic_grouping"] = semantic_metadata
             job["current_stage"] = "components"
             save_job(job)
             append_log(job, f"组件阶段完成，用时 {time.perf_counter() - stage_started:.2f}s，共 {len(primitives)} 个 primitive")
@@ -273,12 +317,11 @@ def health() -> dict[str, Any]:
 
 @app.get("/api/defaults")
 def defaults() -> dict[str, Any]:
-    import os
-
     return {
         "settings": pipeline.default_settings(),
         "generation_prompt": DEFAULT_PROMPT,
-        "generation_configured": bool(os.getenv("LP_AI_BASE_URL") and os.getenv("LP_AI_TOKEN")),
+        "generation_configured": generation_configured(),
+        "semantic_grouping_configured": semantic_grouping_configured(),
     }
 
 
@@ -351,6 +394,7 @@ async def create_job(
         "generation_prompt": generation_prompt.strip() or DEFAULT_PROMPT,
         "generation": None,
         "key_metrics": None,
+        "semantic_grouping": None,
         "primitives": [],
         "groups": [],
         "geometry": [],
@@ -402,7 +446,10 @@ def update_settings(job_id: str, patch: SettingsPatch) -> dict[str, Any]:
     new = pipeline.merge_settings({**old, **patch.settings})
     job["settings"] = new
     key_fields = {"key_low", "key_high", "morph_kernel", "min_component_area", "alpha_threshold"}
-    component_fields = {"install_width_mm", "install_height_mm", "group_gap_mm"}
+    component_fields = {
+        "install_width_mm", "install_height_mm", "group_gap_mm",
+        "semantic_grouping_enabled", "semantic_min_confidence",
+    }
     geometry_fields = {"cut_offset_mm", "spacing_mm", "simplify_mm"}
     changed = {key for key in new if new.get(key) != old.get(key)}
     if job.get("input_mode") == "alpha":

@@ -1,0 +1,6 @@
+INFO:     127.0.0.1:50177 - "GET /api/defaults HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58803 - "POST /api/jobs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58804 - "POST /api/jobs/20260722-114956-e2d0a60a/run HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60562 - "POST /api/jobs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60563 - "POST /api/jobs/20260722-115115-49725145/run HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49699 - "GET /api/defaults HTTP/1.1" 200 OK

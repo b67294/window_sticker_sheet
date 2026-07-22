@@ -451,7 +451,11 @@ async function init() {
     defaults = await api("/api/defaults");
     populateSettings(defaults.settings);
     $("generation-prompt").value = defaults.generation_prompt;
-    $("provider-status").textContent = defaults.generation_configured ? "gpt-image-2 已配置" : "gpt-image-2 未配置 · 可上传母版";
+    const providers = [
+      defaults.generation_configured ? "gpt-image-2 已配置" : "gpt-image-2 未配置",
+      defaults.semantic_grouping_configured ? "语义分组已配置" : "语义分组未配置",
+    ];
+    $("provider-status").textContent = providers.join(" · ");
   } catch (error) { toast(error.message); }
   const previous = localStorage.getItem("windowStickerJobId");
   if (previous) {

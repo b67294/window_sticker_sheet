@@ -1,0 +1,427 @@
+[
+  {
+    "id": "g001",
+    "primitive_ids": [
+      "p001"
+    ],
+    "bbox": [
+      718,
+      20,
+      272,
+      331
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g002",
+    "primitive_ids": [
+      "p002"
+    ],
+    "bbox": [
+      29,
+      30,
+      69,
+      87
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g003",
+    "primitive_ids": [
+      "p003"
+    ],
+    "bbox": [
+      655,
+      39,
+      43,
+      52
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g004",
+    "primitive_ids": [
+      "p004"
+    ],
+    "bbox": [
+      496,
+      49,
+      99,
+      104
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g005",
+    "primitive_ids": [
+      "p005"
+    ],
+    "bbox": [
+      121,
+      86,
+      205,
+      136
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g006",
+    "primitive_ids": [
+      "p006"
+    ],
+    "bbox": [
+      333,
+      137,
+      202,
+      126
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g007",
+    "primitive_ids": [
+      "p007"
+    ],
+    "bbox": [
+      583,
+      170,
+      113,
+      131
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g008",
+    "primitive_ids": [
+      "p008"
+    ],
+    "bbox": [
+      38,
+      172,
+      99,
+      98
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g009",
+    "primitive_ids": [
+      "p009"
+    ],
+    "bbox": [
+      124,
+      283,
+      364,
+      194
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g010",
+    "primitive_ids": [
+      "p010"
+    ],
+    "bbox": [
+      29,
+      317,
+      57,
+      66
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g011",
+    "primitive_ids": [
+      "p011"
+    ],
+    "bbox": [
+      515,
+      317,
+      88,
+      120
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g012",
+    "primitive_ids": [
+      "p012"
+    ],
+    "bbox": [
+      563,
+      323,
+      346,
+      609
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g013",
+    "primitive_ids": [
+      "p013"
+    ],
+    "bbox": [
+      849,
+      415,
+      119,
+      124
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g014",
+    "primitive_ids": [
+      "p014"
+    ],
+    "bbox": [
+      606,
+      429,
+      47,
+      53
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g015",
+    "primitive_ids": [
+      "p015"
+    ],
+    "bbox": [
+      38,
+      449,
+      118,
+      126
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g016",
+    "primitive_ids": [
+      "p016"
+    ],
+    "bbox": [
+      373,
+      493,
+      242,
+      283
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g017",
+    "primitive_ids": [
+      "p017"
+    ],
+    "bbox": [
+      29,
+      560,
+      299,
+      194
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g018",
+    "primitive_ids": [
+      "p018"
+    ],
+    "bbox": [
+      939,
+      607,
+      36,
+      44
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g019",
+    "primitive_ids": [
+      "p019"
+    ],
+    "bbox": [
+      22,
+      779,
+      571,
+      559
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g020",
+    "primitive_ids": [
+      "p020"
+    ],
+    "bbox": [
+      397,
+      816,
+      150,
+      134
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g021",
+    "primitive_ids": [
+      "p021"
+    ],
+    "bbox": [
+      36,
+      831,
+      138,
+      121
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g022",
+    "primitive_ids": [
+      "p022"
+    ],
+    "bbox": [
+      604,
+      969,
+      408,
+      456
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g023",
+    "primitive_ids": [
+      "p023"
+    ],
+    "bbox": [
+      471,
+      1375,
+      83,
+      102
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g024",
+    "primitive_ids": [
+      "p024"
+    ],
+    "bbox": [
+      84,
+      1377,
+      96,
+      97
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  },
+  {
+    "id": "g025",
+    "primitive_ids": [
+      "p025"
+    ],
+    "bbox": [
+      274,
+      1376,
+      96,
+      113
+    ],
+    "active": true,
+    "rotatable": false,
+    "filler": false,
+    "max_copies": 2,
+    "origin": "auto"
+  }
+]

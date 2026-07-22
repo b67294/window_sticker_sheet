@@ -1,0 +1,28 @@
+﻿{
+    "job_id":  "20260722-101149-a44d78c2",
+    "relationship_group_id":  "gm001",
+    "relationship_members":  [
+                                 "p008",
+                                 "p005",
+                                 "p006"
+                             ],
+    "active_group_count":  23,
+    "selected_candidate":  "candidate-1",
+    "selected_pages":  3,
+    "selected_scale":  1.0,
+    "relationship_placement":  {
+                                   "group_id":  "gm001",
+                                   "page":  2,
+                                   "x_mm":  5.0,
+                                   "y_mm":  5.0,
+                                   "angle":  0,
+                                   "copy_index":  0
+                               },
+    "timings":  {
+                    "relationship_apply_seconds":  0.091,
+                    "semantic_geometry_seconds":  2.248,
+                    "semantic_layout_seconds":  35.326
+                },
+    "relation_inference_seconds":  null,
+    "relation_inference_note":  "??????????????????????????? API ?????????????? latency?"
+}

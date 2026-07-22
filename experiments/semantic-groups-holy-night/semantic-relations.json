@@ -1,0 +1,23 @@
+{
+  "schema_version": "semantic-groups.v1",
+  "source_job_id": "20260722-101149-a44d78c2",
+  "inputs": {
+    "clean_master": "runs/20260722-101149-a44d78c2/key/foreground.png",
+    "numbered_overlay": "runs/20260722-101149-a44d78c2/components/components-overlay.png"
+  },
+  "semantic_groups": [
+    {
+      "id": "sg001",
+      "members": ["p008", "p005", "p006"],
+      "mode": "rigid",
+      "preserve_relative_layout": true,
+      "cut_mode": "separate",
+      "confidence": 0.98,
+      "reason": "p008、p005、p006 分别是 O、holy、night，合起来构成完整短语 O holy night"
+    }
+  ],
+  "notes": [
+    "大型教堂、圣诞马槽、三贤士、天使、羔羊和牛头在像素层已经各自连通，不需要额外语义合并。",
+    "金色星芒和小天使作为可独立安装的装饰元素保留为独立组。"
+  ]
+}

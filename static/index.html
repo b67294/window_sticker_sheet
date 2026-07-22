@@ -64,6 +64,10 @@
             <label>最小组件 px<input data-setting="min_component_area" type="number" min="1" step="1"></label>
             <label>合并距离 mm<input data-setting="group_gap_mm" type="number" min="0" step="0.1"></label>
           </div>
+          <label class="check-row"><input data-setting="semantic_grouping_enabled" type="checkbox"> 使用视觉模型识别语义组</label>
+          <label>自动应用置信度
+            <input data-setting="semantic_min_confidence" type="number" min="0.5" max="1" step="0.01">
+          </label>
         </section>
 
         <section class="panel-block">

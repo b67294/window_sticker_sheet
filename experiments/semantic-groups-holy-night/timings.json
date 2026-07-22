@@ -1,0 +1,16 @@
+{
+  "unit": "seconds",
+  "master_generation": 31.0,
+  "job_creation": 0.081,
+  "chroma_key_and_alpha": 0.811,
+  "connected_components_and_initial_groups": 1.162,
+  "baseline_geometry": 2.603,
+  "baseline_layout_and_final_render": 39.238,
+  "semantic_relation_inference": null,
+  "semantic_relation_inference_note": "本轮由当前对话视觉模型检查完整母版和编号覆盖图后生成，没有独立外部 API 请求，无法取得单独服务端 latency。",
+  "relationship_json_apply": 0.091,
+  "semantic_geometry": 2.248,
+  "semantic_layout_and_final_render": 35.326,
+  "baseline_algorithm_total_excluding_generation": 43.895,
+  "semantic_rerun_total_excluding_relation_inference": 37.665
+}
