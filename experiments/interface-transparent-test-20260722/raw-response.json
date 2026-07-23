@@ -1,0 +1,21 @@
+{
+  "success": 1,
+  "errorCode": 200,
+  "errorStr": "成功",
+  "data": {
+    "requestId": "2026072206163226c55f",
+    "model": "gpt-image-2",
+    "imageUrl": "http://52.77.181.255:8078/files/202607220616368010997c354329a5c7.png",
+    "imageUrls": [
+      "http://52.77.181.255:8078/files/202607220616368010997c354329a5c7.png"
+    ],
+    "size": "1024x1024",
+    "bytes": 2436869,
+    "filename": "202607220616368010997c354329a5c7.png",
+    "durationMs": 229111,
+    "tokensUsed": 14366,
+    "promptId": "ee05fab952af4f68a9b90fe8083c7140",
+    "errorMsg": null
+  },
+  "requestId": "ee05fab952af4f68a9b90fe8083c7140"
+}

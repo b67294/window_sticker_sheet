@@ -1,0 +1,25 @@
+{
+  "success": true,
+  "http_status": 200,
+  "wall_seconds": 237.233,
+  "download_seconds": 1.009,
+  "api_duration_ms": 229111,
+  "tokens_used": 14366,
+  "requested_size": "1024x1024",
+  "format": "PNG",
+  "mode": "RGB",
+  "bands": [
+    "R",
+    "G",
+    "B"
+  ],
+  "width": 1254,
+  "height": 1254,
+  "has_alpha": false,
+  "alpha_min": 255,
+  "alpha_max": 255,
+  "transparent_pixels": 0,
+  "partial_alpha_pixels": 0,
+  "transparent_ratio": 0.0,
+  "result_file": "result-original.png"
+}
