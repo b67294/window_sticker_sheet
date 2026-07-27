@@ -1,0 +1,58 @@
+{
+  "35": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "37",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "37": {
+    "inputs": {
+      "detail_method": "VITMatte",
+      "detail_erode": 4,
+      "detail_dilate": 3,
+      "black_point": 0.01,
+      "white_point": 0.99,
+      "process_detail": true,
+      "device": "cuda",
+      "max_megapixels": 41.4,
+      "image": [
+        "49",
+        0
+      ],
+      "birefnet_model": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "LayerMask: BiRefNetUltraV2",
+    "_meta": {
+      "title": "LayerMask: BiRefNet Ultra V2(Advance)"
+    }
+  },
+  "39": {
+    "inputs": {
+      "version": "RMBG-2.0"
+    },
+    "class_type": "LayerMask: LoadBiRefNetModelV2",
+    "_meta": {
+      "title": "LayerMask: Load BiRefNet Model V2(Advance)"
+    }
+  },
+  "49": {
+    "inputs": {
+      "url": "#{image}",
+      "speak_and_recognation": true
+    },
+    "class_type": "LoadImagesFromURL",
+    "_meta": {
+      "title": "LoadImagesFromURL"
+    }
+  }
+}

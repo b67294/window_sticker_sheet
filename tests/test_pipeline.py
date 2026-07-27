@@ -11,10 +11,16 @@ def test_default_installation_size_is_portrait_window():
     defaults = pipeline.default_settings()
     assert defaults["install_width_mm"] == 800.0
     assert defaults["install_height_mm"] == 1200.0
+    assert defaults["sheet_margin_mm"] == 10.0
     assert defaults["compactness_weight"] == 0.65
     assert defaults["alignment_weight"] == 0.25
     assert defaults["balance_weight"] == 0.10
     assert defaults["max_shrink_ratio"] == 0.08
+
+
+def test_explicit_legacy_margin_is_preserved():
+    settings = pipeline.merge_settings({"sheet_margin_mm": 5.0})
+    assert settings["sheet_margin_mm"] == 5.0
 
 
 def test_layout_scaling_rebuilds_fixed_mm_buffers():
@@ -106,6 +112,12 @@ def test_full_algorithm_pipeline(tmp_path):
     _, candidates, selected = pipeline.run_layout(job, tmp_path, config)
     assert len(candidates) == 4
     assert selected in {item["id"] for item in candidates}
+    assert {item["strategy"] for item in candidates} == {
+        "tidy_rows",
+        "maxrects",
+        "hybrid_fill",
+        "center_compact",
+    }
     for candidate in candidates:
         assert candidate["layout_scale"] >= 0.92
         assert 0 <= candidate["compactness"] <= 1
@@ -113,11 +125,46 @@ def test_full_algorithm_pipeline(tmp_path):
         assert 0 <= candidate["largest_void_ratio"] <= 1
         pages = {}
         for placement in candidate["placements"]:
-            pages.setdefault(placement["page"], []).append(shape(placement["occupancy"]))
+            occupancy = shape(placement["occupancy"])
+            bounds = occupancy.bounds
+            assert bounds[0] >= config["sheet_margin_mm"] - 1e-5
+            assert bounds[1] >= config["sheet_margin_mm"] - 1e-5
+            assert bounds[2] <= config["sheet_width_mm"] - config["sheet_margin_mm"] + 1e-5
+            assert bounds[3] <= config["sheet_height_mm"] - config["sheet_margin_mm"] + 1e-5
+            pages.setdefault(placement["page"], []).append(occupancy)
         for polygons in pages.values():
             for index, left in enumerate(polygons):
                 for right in polygons[index + 1 :]:
                     assert left.intersection(right).area < 1e-5
+    centered = next(item for item in candidates if item["strategy"] == "center_compact")
+    maxrects = next(item for item in candidates if item["strategy"] == "maxrects")
+    assert centered["page_count"] == maxrects["page_count"]
+    assert centered["layout_scale"] == maxrects["layout_scale"]
+    maxrects_by_group = {
+        (placement["group_id"], placement["copy_index"]): placement
+        for placement in maxrects["placements"]
+    }
+    page_shifts = {}
+    for placement in centered["placements"]:
+        original = maxrects_by_group[(placement["group_id"], placement["copy_index"])]
+        assert placement["page"] == original["page"]
+        assert placement["angle"] == original["angle"]
+        shift = (
+            round(placement["x_mm"] - original["x_mm"], 3),
+            round(placement["y_mm"] - original["y_mm"], 3),
+        )
+        page_shifts.setdefault(placement["page"], set()).add(shift)
+    assert all(len(shifts) == 1 for shifts in page_shifts.values())
+    centered_pages = {}
+    for placement in centered["placements"]:
+        centered_pages.setdefault(placement["page"], []).append(shape(placement["occupancy"]))
+    for polygons in centered_pages.values():
+        min_x = min(polygon.bounds[0] for polygon in polygons)
+        min_y = min(polygon.bounds[1] for polygon in polygons)
+        max_x = max(polygon.bounds[2] for polygon in polygons)
+        max_y = max(polygon.bounds[3] for polygon in polygons)
+        assert abs((min_x + max_x) / 2.0 - config["sheet_width_mm"] / 2.0) <= 0.2
+        assert abs((min_y + max_y) / 2.0 - config["sheet_height_mm"] / 2.0) <= 0.2
 
 
 def test_alpha_passthrough_preserves_soft_alpha(tmp_path):

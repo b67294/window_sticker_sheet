@@ -1,0 +1,19 @@
+{
+  "size": [
+    1254,
+    1254
+  ],
+  "mode": "RGBA",
+  "alpha_min": 0,
+  "alpha_max": 255,
+  "corner_alpha": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "transparent_pixels": 858124,
+  "partial_alpha_pixels": 85887,
+  "opaque_pixels": 628505,
+  "foreground_ratio": 0.454299
+}

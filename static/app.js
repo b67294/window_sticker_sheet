@@ -244,7 +244,7 @@ function canvasClick(event) {
 
 function renderCandidates() {
   const grid = $("candidate-grid");
-  const strategyNames = { tidy_rows: "整齐行列", maxrects: "MaxRects 紧凑", hybrid_fill: "异形填缝", hybrid_search: "多起点搜索" };
+  const strategyNames = { tidy_rows: "整齐行列", maxrects: "MaxRects 紧凑", hybrid_fill: "异形填缝", center_compact: "中心紧凑" };
   grid.innerHTML = (currentJob.candidates || []).map((candidate) => `
     <article class="candidate-card ${currentJob.selected_candidate === candidate.id ? "selected" : ""}">
       <img src="${candidate.contact_sheet_url}" alt="${candidate.id}">

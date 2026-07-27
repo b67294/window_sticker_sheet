@@ -30,7 +30,7 @@ def default_settings() -> dict[str, Any]:
         "install_height_mm": 1200.0,
         "sheet_width_mm": 381.0,
         "sheet_height_mm": 304.8,
-        "sheet_margin_mm": 5.0,
+        "sheet_margin_mm": 10.0,
         "cut_offset_mm": 1.5,
         "spacing_mm": 2.0,
         "group_gap_mm": 2.0,
@@ -887,6 +887,40 @@ def _compact_pages(pages: list[list[PackedItem]], settings: dict[str, Any]) -> N
                         break
 
 
+def _center_pages(pages: list[list[PackedItem]], settings: dict[str, Any]) -> None:
+    """Center each compact page as one rigid block inside the printable area."""
+    margin = float(settings["sheet_margin_mm"])
+    sheet_width = float(settings["sheet_width_mm"])
+    sheet_height = float(settings["sheet_height_mm"])
+    target_center_x = sheet_width / 2.0
+    target_center_y = sheet_height / 2.0
+
+    for placed in pages:
+        if not placed:
+            continue
+        min_x = min(item.occupancy.bounds[0] for item in placed)
+        min_y = min(item.occupancy.bounds[1] for item in placed)
+        max_x = max(item.occupancy.bounds[2] for item in placed)
+        max_y = max(item.occupancy.bounds[3] for item in placed)
+        dx = target_center_x - (min_x + max_x) / 2.0
+        dy = target_center_y - (min_y + max_y) / 2.0
+        for item in placed:
+            _translate_packed(item, dx, dy)
+
+        for item in placed:
+            bounds = item.occupancy.bounds
+            if (
+                bounds[0] < margin - 1e-6
+                or bounds[1] < margin - 1e-6
+                or bounds[2] > sheet_width - margin + 1e-6
+                or bounds[3] > sheet_height - margin + 1e-6
+            ):
+                raise ValueError("居中排版超出可打印区域")
+        for index, item in enumerate(placed):
+            if _has_positive_overlap(item.occupancy, placed[index + 1 :]):
+                raise ValueError("居中排版后出现贴纸重叠")
+
+
 def _largest_empty_rectangle(mask: np.ndarray) -> int:
     if mask.size == 0:
         return 0
@@ -1012,7 +1046,10 @@ def _pack_at_scale(
     rng = random.Random(seed + order_variant * 997)
     scaled_items = [_scaled_layout_source(item, settings, layout_scale) for item in items]
     ordered = _sort_items(scaled_items, strategy, rng)
-    placement_strategy = "hybrid_fast" if strategy == "hybrid_search" and order_variant > 0 else strategy
+    if strategy == "center_compact":
+        placement_strategy = "maxrects"
+    else:
+        placement_strategy = "hybrid_fast" if strategy == "hybrid_search" and order_variant > 0 else strategy
     pages: list[list[PackedItem]] = []
     oversized: list[str] = []
     for source in ordered:
@@ -1031,6 +1068,8 @@ def _pack_at_scale(
             _place_one(source, pages, settings, placement_strategy, rng, copy_index=copy_index, allow_new_page=False)
     if compact:
         _compact_pages(pages, settings)
+    if strategy == "center_compact":
+        _center_pages(pages, settings)
 
     printable_area = (float(settings["sheet_width_mm"]) - 2 * float(settings["sheet_margin_mm"])) * (
         float(settings["sheet_height_mm"]) - 2 * float(settings["sheet_margin_mm"])
@@ -1295,7 +1334,7 @@ def run_layout(job: dict[str, Any], job_dir: Path, settings: dict[str, Any]) -> 
     geometries = job.get("geometry", [])
     if not geometries:
         raise ValueError("没有可排版的贴纸组")
-    strategies = ["tidy_rows", "maxrects", "hybrid_fill", "hybrid_search"]
+    strategies = ["tidy_rows", "maxrects", "hybrid_fill", "center_compact"]
     seeds = [11, 23, 37, 53]
     candidates: list[dict[str, Any]] = []
     artifacts: list[dict[str, Any]] = []
