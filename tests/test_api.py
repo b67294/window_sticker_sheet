@@ -33,6 +33,14 @@ def transparent_upload_bytes():
 def test_direct_master_job(tmp_path, monkeypatch):
     monkeypatch.setattr(webapp, "RUNS_DIR", tmp_path)
     webapp._jobs.clear()
+    def fake_remove_background(source_path, directory):
+        output_dir = directory / "comfyui"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        result = output_dir / "transparent.png"
+        result.write_bytes(transparent_upload_bytes())
+        return result, [], {"prompt_id": "mock-comfyui", "alpha_range": [0, 255]}
+
+    monkeypatch.setattr(webapp, "remove_background", fake_remove_background)
     client = TestClient(webapp.app)
     settings = webapp.pipeline.default_settings()
     settings.update({"install_width_mm": 250, "install_height_mm": 175, "preview_dpi": 24, "output_dpi": 24, "group_gap_mm": 0.2})
@@ -155,3 +163,292 @@ def test_running_job_rejects_mutation(tmp_path, monkeypatch):
     client = TestClient(webapp.app)
     response = client.patch(f"/api/jobs/{job['id']}/settings", json={"settings": {"spacing_mm": 3}})
     assert response.status_code == 409
+
+
+def test_ecommerce_batch_creates_independent_serial_children(tmp_path, monkeypatch):
+    monkeypatch.setattr(webapp, "RUNS_DIR", tmp_path)
+    webapp._jobs.clear()
+    webapp._batches.clear()
+    monkeypatch.setattr(webapp, "generation_configured", lambda: True)
+    monkeypatch.setattr(webapp, "comfyui_configured", lambda: True)
+
+    started = []
+
+    class DeferredThread:
+        def __init__(self, target, args=(), daemon=None):
+            self.target = target
+            self.args = args
+        def start(self):
+            started.append((self.target, self.args))
+
+    monkeypatch.setattr(webapp.threading, "Thread", DeferredThread)
+    client = TestClient(webapp.app)
+    prompt = "共享的强衍生测试 Prompt"
+    files = [
+        ("files", (f"source-{index}.png", upload_bytes(), "image/png"))
+        for index in range(3)
+    ]
+    response = client.post(
+        "/api/batches",
+        data={"settings_json": "{}", "generation_prompt": prompt},
+        files=files,
+    )
+    assert response.status_code == 200, response.text
+    batch = response.json()
+    assert batch["status"] == "queued"
+    assert batch["total"] == 3
+    assert batch["delivery"]["renderPdf"] is True
+    assert batch["delivery"]["pdfStatus"] == "pending"
+    assert len(started) == 1
+    assert (tmp_path / "_batches" / batch["id"] / "batch.json").is_file()
+    child_jobs = [webapp._jobs[item["job_id"]] for item in batch["items"]]
+    assert all(job["input_mode"] == "source" for job in child_jobs)
+    assert all(job["generation_prompt"] == prompt for job in child_jobs)
+    assert all(job["render_pdf"] is True for job in child_jobs)
+    assert len({webapp.job_dir(job["id"]) for job in child_jobs}) == 3
+
+
+def test_batch_can_skip_pdf_generation(tmp_path, monkeypatch):
+    monkeypatch.setattr(webapp, "RUNS_DIR", tmp_path)
+    webapp._jobs.clear()
+    webapp._batches.clear()
+    monkeypatch.setattr(webapp, "generation_configured", lambda: True)
+    monkeypatch.setattr(webapp, "comfyui_configured", lambda: True)
+
+    class DeferredThread:
+        def __init__(self, target, args=(), daemon=None):
+            self.target = target
+            self.args = args
+        def start(self):
+            pass
+
+    monkeypatch.setattr(webapp.threading, "Thread", DeferredThread)
+    client = TestClient(webapp.app)
+    response = client.post(
+        "/api/batches",
+        data={
+            "settings_json": "{}",
+            "generation_prompt": "prompt",
+            "render_pdf": "false",
+        },
+        files=[
+            ("files", ("a.png", upload_bytes(), "image/png")),
+            ("files", ("b.png", upload_bytes(), "image/png")),
+        ],
+    )
+    assert response.status_code == 200
+    batch = response.json()
+    assert batch["delivery"]["renderPdf"] is False
+    assert batch["delivery"]["pdfStatus"] == "skipped"
+    assert all(
+        webapp._jobs[item["job_id"]]["render_pdf"] is False
+        for item in batch["items"]
+    )
+
+
+def test_delivery_package_groups_selected_png_and_pdf(tmp_path, monkeypatch):
+    monkeypatch.setattr(webapp, "RUNS_DIR", tmp_path)
+    webapp._jobs.clear()
+    webapp._batches.clear()
+    job = webapp._create_job_record(
+        input_mode="source",
+        file_name="商品 A.webp",
+        content=upload_bytes(),
+        settings=webapp.pipeline.default_settings(),
+        generation_prompt="prompt",
+        batch_id="batch-delivery",
+    )
+    final_root = webapp.job_dir(job["id"]) / "final"
+    (final_root / "transparent").mkdir(parents=True)
+    (final_root / "pdf").mkdir(parents=True)
+    for page in (1, 2):
+        image = Image.new("RGBA", (40, 30), (0, 0, 0, 0))
+        ImageDraw.Draw(image).rectangle((8, 8, 20, 20), fill=(220, 30, 40, 255))
+        image.save(
+            final_root / "transparent" / f"sheet-{page:02d}.png",
+            dpi=(300, 300),
+        )
+    (final_root / "pdf" / "print-sheets.pdf").write_bytes(b"%PDF-1.4\n%%EOF")
+    (final_root / "layout.json").write_text(
+        json.dumps({"delivery_render_version": 2, "files": {}}),
+        encoding="utf-8",
+    )
+    job["status"] = "complete"
+    job["current_stage"] = "layout"
+    job["selected_candidate"] = "candidate-4"
+    job["candidates"] = [{"id": "candidate-4", "score": 0.93, "page_count": 2}]
+    webapp.save_job(job)
+    batch = {
+        "id": "batch-delivery",
+        "status": "complete",
+        "items": [
+            {
+                "job_id": job["id"],
+                "source_name": "商品 A.webp",
+                "status": "complete",
+                "error": None,
+            }
+        ],
+        "delivery": {
+            "renderPdf": True,
+            "pdfStatus": "ready",
+            "generatedAt": None,
+            "files": [],
+            "error": None,
+        },
+        "created_at": webapp.now_iso(),
+    }
+    webapp.save_batch(batch)
+    webapp.assemble_delivery(batch)
+    root = tmp_path / "_batches" / "batch-delivery" / "delivery"
+    assert (root / "PNG" / "001-商品-A-p01.png").is_file()
+    assert (root / "PNG" / "001-商品-A-p02.png").is_file()
+    assert (root / "PDF" / "001-商品-A.pdf").is_file()
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["items"][0]["selectedCandidate"] == "candidate-4"
+    assert manifest["items"][0]["selectedScore"] == 0.93
+
+    client = TestClient(webapp.app)
+    response = client.get("/api/batches/batch-delivery/delivery/download")
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        names = set(archive.namelist())
+        assert "PNG/001-商品-A-p01.png" in names
+        assert "PDF/001-商品-A.pdf" in names
+        assert "manifest.csv" in names
+        assert "manifest.json" in names
+        assert all(not name.startswith("final/") for name in names)
+
+
+def test_pdf_backfill_reuses_existing_sheets_without_pipeline_rerun(tmp_path, monkeypatch):
+    monkeypatch.setattr(webapp, "RUNS_DIR", tmp_path)
+    webapp._jobs.clear()
+    webapp._batches.clear()
+    job = webapp._create_job_record(
+        input_mode="source",
+        file_name="source.png",
+        content=upload_bytes(),
+        settings=webapp.pipeline.default_settings(),
+        generation_prompt="prompt",
+        batch_id="batch-backfill",
+        render_pdf=False,
+    )
+    final_root = webapp.job_dir(job["id"]) / "final"
+    (final_root / "white").mkdir(parents=True)
+    (final_root / "transparent").mkdir(parents=True)
+    white = Image.new("RGB", (120, 90), "white")
+    white.save(final_root / "white" / "sheet-01.jpg", dpi=(300, 300))
+    transparent = Image.new("RGBA", (120, 90), (0, 0, 0, 0))
+    transparent.save(
+        final_root / "transparent" / "sheet-01.png",
+        dpi=(300, 300),
+    )
+    (final_root / "layout.json").write_text(
+        json.dumps(
+            {
+                "delivery_render_version": 2,
+                "files": {},
+                "page_count": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    job["status"] = "complete"
+    job["current_stage"] = "layout"
+    job["selected_candidate"] = "candidate-1"
+    job["candidates"] = [{"id": "candidate-1", "score": 0.9, "page_count": 1}]
+    webapp.save_job(job)
+    batch = {
+        "id": "batch-backfill",
+        "status": "complete",
+        "items": [
+            {
+                "job_id": job["id"],
+                "source_name": "source.png",
+                "status": "complete",
+                "error": None,
+            }
+        ],
+        "delivery": {
+            "renderPdf": False,
+            "pdfStatus": "skipped",
+            "generatedAt": None,
+            "files": [],
+            "error": None,
+        },
+        "created_at": webapp.now_iso(),
+    }
+    webapp.save_batch(batch)
+    monkeypatch.setattr(
+        webapp,
+        "execute_job",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("不应重新运行生图或排版")
+        ),
+    )
+    webapp.generate_batch_pdfs(batch["id"])
+    assert (
+        final_root / "pdf" / "print-sheets.pdf"
+    ).is_file()
+    assert webapp._jobs[job["id"]]["status"] == "complete"
+    assert webapp._jobs[job["id"]]["pdf_status"] == "ready"
+    assert webapp._batches[batch["id"]]["delivery"]["pdfStatus"] == "ready"
+
+
+def test_batch_continues_after_failure_and_retry_skips_completed(tmp_path, monkeypatch):
+    monkeypatch.setattr(webapp, "RUNS_DIR", tmp_path)
+    webapp._jobs.clear()
+    webapp._batches.clear()
+    settings = webapp.pipeline.default_settings()
+    jobs = [
+        webapp._create_job_record(
+            input_mode="source",
+            file_name=f"{index}.png",
+            content=upload_bytes(),
+            settings=settings,
+            generation_prompt="prompt",
+            batch_id="batch-test",
+        )
+        for index in range(3)
+    ]
+    batch = {
+        "id": "batch-test",
+        "status": "queued",
+        "items": [
+            {"job_id": job["id"], "source_name": f"{index}.png", "status": "queued", "error": None}
+            for index, job in enumerate(jobs)
+        ],
+        "current_job_id": None,
+        "error": None,
+        "created_at": webapp.now_iso(),
+    }
+    webapp.save_batch(batch)
+    calls = []
+
+    def first_run(job_id, through_stage, from_stage=None):
+        calls.append(job_id)
+        job = webapp.require_job(job_id)
+        job["status"] = "failed" if job_id == jobs[1]["id"] else "complete"
+        job["error"] = "mock failure" if job["status"] == "failed" else None
+        job["current_stage"] = "layout" if job["status"] == "complete" else "generate"
+        webapp.save_job(job)
+
+    monkeypatch.setattr(webapp, "execute_job", first_run)
+    webapp.execute_batch(batch["id"])
+    assert calls == [job["id"] for job in jobs]
+    assert webapp._batches[batch["id"]]["status"] == "partial_success"
+
+    retry_calls = []
+
+    def retry_run(job_id, through_stage, from_stage=None):
+        retry_calls.append(job_id)
+        job = webapp.require_job(job_id)
+        job["status"] = "complete"
+        job["error"] = None
+        job["current_stage"] = "layout"
+        webapp.save_job(job)
+
+    monkeypatch.setattr(webapp, "execute_job", retry_run)
+    webapp.execute_batch(batch["id"])
+    assert retry_calls == [jobs[1]["id"]]
+    assert webapp._batches[batch["id"]]["status"] == "complete"

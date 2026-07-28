@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import csv
 import json
 import mimetypes
 import os
+import re
 import shutil
 import threading
 import time
@@ -37,6 +39,7 @@ def _load_local_env(path: Path) -> None:
 _load_local_env(Path(__file__).resolve().with_name(".env"))
 
 import pipeline
+from comfyui_client import comfyui_configured, remove_background
 from generation import DEFAULT_PROMPT, generate_master, generation_configured
 from semantic_grouping import infer_and_apply_semantic_groups, semantic_grouping_configured
 
@@ -52,6 +55,7 @@ app = FastAPI(title="Window Sticker Sheet Workbench", version="0.1.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 _jobs: dict[str, dict[str, Any]] = {}
+_batches: dict[str, dict[str, Any]] = {}
 _lock = threading.RLock()
 
 
@@ -63,29 +67,54 @@ def job_dir(job_id: str) -> Path:
     return RUNS_DIR / job_id
 
 
+def batches_dir() -> Path:
+    return RUNS_DIR / "_batches"
+
+
+def batch_dir(batch_id: str) -> Path:
+    return batches_dir() / batch_id
+
+
+def delivery_dir(batch_id: str) -> Path:
+    return batch_dir(batch_id) / "delivery"
+
+
+def _save_json_with_unique_temp(target: Path, payload: dict[str, Any]) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.parent / f".{target.stem}-{uuid.uuid4().hex}.tmp"
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        for attempt in range(7):
+            try:
+                temporary.replace(target)
+                return
+            except PermissionError:
+                if attempt == 6:
+                    raise
+                time.sleep(min(0.5, 0.03 * (2**attempt)))
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def save_job(job: dict[str, Any]) -> None:
     with _lock:
         job["updated_at"] = now_iso()
         directory = job_dir(job["id"])
-        directory.mkdir(parents=True, exist_ok=True)
-        # A fixed job.json.tmp lets concurrent requests overwrite or replace
-        # the same temporary file. Windows then raises PermissionError. Keep
-        # writes serialized and give every save its own temporary path.
-        temporary = directory / f".job-{uuid.uuid4().hex}.tmp"
-        target = directory / "job.json"
-        try:
-            temporary.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
-            for attempt in range(5):
-                try:
-                    temporary.replace(target)
-                    break
-                except PermissionError:
-                    if attempt == 4:
-                        raise
-                    time.sleep(0.03 * (attempt + 1))
-        finally:
-            temporary.unlink(missing_ok=True)
+        _save_json_with_unique_temp(directory / "job.json", job)
         _jobs[job["id"]] = job
+
+
+def save_batch(batch: dict[str, Any]) -> None:
+    with _lock:
+        batch["updated_at"] = now_iso()
+        _save_json_with_unique_temp(
+            batch_dir(batch["id"]) / "batch.json",
+            batch,
+        )
+        _batches[batch["id"]] = batch
 
 
 def ensure_job_mutable(job: dict[str, Any]) -> None:
@@ -108,12 +137,36 @@ def load_jobs() -> None:
 load_jobs()
 
 
+def load_batches() -> None:
+    for path in batches_dir().glob("*/batch.json"):
+        try:
+            batch = json.loads(path.read_text(encoding="utf-8"))
+            if batch.get("status") in {"queued", "running"}:
+                batch["status"] = "interrupted"
+                batch["error"] = "服务重启中断了上次批量调度，可重试未完成项"
+                _save_json_with_unique_temp(path, batch)
+            _batches[batch["id"]] = batch
+        except Exception:
+            continue
+
+
+load_batches()
+
+
 def require_job(job_id: str) -> dict[str, Any]:
     with _lock:
         job = _jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
     return job
+
+
+def require_batch(batch_id: str) -> dict[str, Any]:
+    with _lock:
+        batch = _batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="批次不存在")
+    return batch
 
 
 def append_log(job: dict[str, Any], message: str) -> None:
@@ -149,10 +202,320 @@ def expose_job(job: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _safe_delivery_stem(value: str, fallback: str) -> str:
+    stem = re.sub(r"[^\w.-]+", "-", Path(value).stem).strip("-.")
+    return stem or fallback
+
+
+def _ensure_delivery_state(batch: dict[str, Any]) -> dict[str, Any]:
+    delivery = batch.setdefault("delivery", {})
+    render_pdf = bool(delivery.get("renderPdf", True))
+    delivery.setdefault("renderPdf", render_pdf)
+    if "pdfStatus" not in delivery:
+        completed = [
+            _jobs.get(item.get("job_id"))
+            for item in batch.get("items", [])
+            if _jobs.get(item.get("job_id"), {}).get("status") == "complete"
+        ]
+        all_have_pdf = bool(completed) and all(
+            (
+                job_dir(job["id"])
+                / "final"
+                / "pdf"
+                / "print-sheets.pdf"
+            ).is_file()
+            for job in completed
+        )
+        delivery["pdfStatus"] = (
+            "ready"
+            if render_pdf and all_have_pdf
+            else "pending"
+            if render_pdf
+            else "skipped"
+        )
+    delivery.setdefault("generatedAt", None)
+    delivery.setdefault("files", [])
+    delivery.setdefault("error", None)
+    return delivery
+
+
+def _selected_candidate(job: dict[str, Any]) -> dict[str, Any] | None:
+    return next(
+        (
+            candidate
+            for candidate in job.get("candidates", [])
+            if candidate.get("id") == job.get("selected_candidate")
+        ),
+        None,
+    )
+
+
+def _ensure_guide_free_job_outputs(
+    job: dict[str, Any],
+    *,
+    render_pdf: bool,
+) -> None:
+    """One-time migration for finals created before guide-free delivery rendering."""
+    directory = job_dir(job["id"])
+    manifest_path = directory / "final" / "layout.json"
+    manifest: dict[str, Any] = {}
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = {}
+    if int(manifest.get("delivery_render_version", 0)) >= 2:
+        return
+    candidate = _selected_candidate(job)
+    if not candidate or not job.get("geometry"):
+        raise RuntimeError("历史任务缺少候选或几何数据，无法重建无辅助线交付图")
+    outputs = pipeline.render_selected_outputs(
+        candidate,
+        job["geometry"],
+        directory,
+        pipeline.merge_settings(job.get("settings")),
+        render_pdf=render_pdf,
+    )
+    selected_names = {"selected-transparent", "selected-white", "selected-pdf"}
+    job["artifacts"] = [
+        item
+        for item in job.get("artifacts", [])
+        if item.get("name") not in selected_names
+        and not item.get("name", "").startswith("selected-pdf-page-")
+    ]
+    job["artifacts"].extend(
+        pipeline.selected_output_artifacts(
+            outputs,
+            directory,
+            "交付升级方案",
+        )
+    )
+    job["render_pdf"] = render_pdf
+    job["pdf_status"] = (
+        "ready"
+        if outputs.get("combined_pdf")
+        else "failed"
+        if outputs.get("pdf_error")
+        else "skipped"
+    )
+    job["pdf_error"] = outputs.get("pdf_error")
+    job.setdefault("logs", []).append(
+        f"[{datetime.now().strftime('%H:%M:%S')}] 已重建无辅助线产品交付图"
+    )
+    save_job(job)
+
+
+def assemble_delivery(batch: dict[str, Any]) -> dict[str, Any]:
+    """Build the product-facing PNG/PDF folders from completed child jobs."""
+    root = delivery_dir(batch["id"])
+    resolved_root = root.resolve()
+    expected_root = batch_dir(batch["id"]).resolve()
+    if expected_root not in resolved_root.parents:
+        raise RuntimeError("交付目录超出批次目录")
+    if root.exists():
+        shutil.rmtree(root)
+    png_dir = root / "PNG"
+    pdf_dir = root / "PDF"
+    png_dir.mkdir(parents=True, exist_ok=True)
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+
+    rows: list[dict[str, Any]] = []
+    manifest_items: list[dict[str, Any]] = []
+    copied_files: list[str] = []
+    completed_jobs = 0
+    missing_pdfs: list[str] = []
+    for index, item in enumerate(batch.get("items", []), start=1):
+        job = _jobs.get(item.get("job_id"))
+        source_name = item.get("source_name") or f"item-{index}"
+        prefix = (
+            f"{index:03d}-"
+            f"{_safe_delivery_stem(source_name, f'item-{index}')}"
+        )
+        status = job.get("status") if job else "missing"
+        png_names: list[str] = []
+        pdf_name: str | None = None
+        selected = _selected_candidate(job) if job else None
+        error = job.get("error") if job else "子任务不存在"
+        if job and status == "complete":
+            completed_jobs += 1
+            _ensure_guide_free_job_outputs(
+                job,
+                render_pdf=bool(_ensure_delivery_state(batch)["renderPdf"]),
+            )
+            final_root = job_dir(job["id"]) / "final"
+            for page_index, source in enumerate(
+                sorted((final_root / "transparent").glob("sheet-*.png")),
+                start=1,
+            ):
+                name = f"{prefix}-p{page_index:02d}.png"
+                shutil.copy2(source, png_dir / name)
+                png_names.append(name)
+                copied_files.append(f"PNG/{name}")
+            source_pdf = final_root / "pdf" / "print-sheets.pdf"
+            if source_pdf.is_file():
+                pdf_name = f"{prefix}.pdf"
+                shutil.copy2(source_pdf, pdf_dir / pdf_name)
+                copied_files.append(f"PDF/{pdf_name}")
+            elif _ensure_delivery_state(batch)["renderPdf"]:
+                missing_pdfs.append(source_name)
+        manifest_item = {
+            "index": index,
+            "sourceName": source_name,
+            "jobId": job.get("id") if job else item.get("job_id"),
+            "status": status,
+            "selectedCandidate": (
+                job.get("selected_candidate") if job else None
+            ),
+            "selectedScore": selected.get("score") if selected else None,
+            "pngFiles": png_names,
+            "pdfFile": pdf_name,
+            "error": error,
+        }
+        manifest_items.append(manifest_item)
+        rows.append(
+            {
+                "index": index,
+                "source_name": source_name,
+                "job_id": manifest_item["jobId"],
+                "status": status,
+                "selected_candidate": manifest_item["selectedCandidate"],
+                "selected_score": manifest_item["selectedScore"],
+                "png_files": ";".join(png_names),
+                "pdf_file": pdf_name or "",
+                "error": error or "",
+            }
+        )
+
+    manifest = {
+        "batchId": batch["id"],
+        "batchStatus": batch.get("status"),
+        "renderPdf": _ensure_delivery_state(batch)["renderPdf"],
+        "generatedAt": now_iso(),
+        "completedItems": completed_jobs,
+        "items": manifest_items,
+    }
+    manifest_json = root / "manifest.json"
+    manifest_json.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    manifest_csv = root / "manifest.csv"
+    with manifest_csv.open("w", encoding="utf-8-sig", newline="") as output:
+        writer = csv.DictWriter(
+            output,
+            fieldnames=[
+                "index",
+                "source_name",
+                "job_id",
+                "status",
+                "selected_candidate",
+                "selected_score",
+                "png_files",
+                "pdf_file",
+                "error",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+    copied_files.extend(["manifest.json", "manifest.csv"])
+
+    delivery = _ensure_delivery_state(batch)
+    delivery["generatedAt"] = manifest["generatedAt"]
+    delivery["files"] = copied_files
+    if delivery["renderPdf"]:
+        delivery["pdfStatus"] = "failed" if missing_pdfs else "ready"
+        delivery["error"] = (
+            f"{len(missing_pdfs)} 款缺少PDF：{', '.join(missing_pdfs[:3])}"
+            if missing_pdfs
+            else None
+        )
+    else:
+        delivery["pdfStatus"] = "skipped"
+        delivery["error"] = None
+    return manifest
+
+
+def expose_batch(batch: dict[str, Any]) -> dict[str, Any]:
+    _ensure_delivery_state(batch)
+    payload = json.loads(json.dumps(batch, ensure_ascii=False))
+    exposed_items: list[dict[str, Any]] = []
+    for item in batch.get("items", []):
+        job = _jobs.get(item.get("job_id"))
+        exposed = expose_job(job) if job else None
+        child_status = exposed.get("status") if exposed else "missing"
+        if batch.get("status") == "queued" and child_status == "ready":
+            child_status = "queued"
+        source_url = None
+        master_url = None
+        candidate_url = None
+        selected_candidate = None
+        selected_score = None
+        if exposed:
+            source_artifact = next(
+                (entry for entry in exposed.get("artifacts", []) if entry.get("name") == "upload"),
+                None,
+            )
+            master_artifact = next(
+                (entry for entry in exposed.get("artifacts", []) if entry.get("name") == "master"),
+                None,
+            )
+            selected_candidate = _selected_candidate(exposed)
+            source_url = source_artifact.get("url") if source_artifact else None
+            master_url = master_artifact.get("url") if master_artifact else None
+            candidate_url = (
+                selected_candidate.get("contact_sheet_url")
+                if selected_candidate
+                else None
+            )
+            selected_score = selected_candidate.get("score") if selected_candidate else None
+        exposed_items.append(
+            {
+                **item,
+                "status": child_status,
+                "current_stage": exposed.get("current_stage") if exposed else None,
+                "error": exposed.get("error") if exposed else "子任务不存在",
+                "source_url": source_url,
+                "master_url": master_url,
+                "candidate_url": candidate_url,
+                "selected_candidate": (
+                    selected_candidate.get("id") if selected_candidate else None
+                ),
+                "selected_score": selected_score,
+                "final_pdf_url": exposed.get("final_pdf_url") if exposed else None,
+                "final_pdf_page_urls": (
+                    exposed.get("final_pdf_page_urls", []) if exposed else []
+                ),
+                "job_download_url": exposed.get("download_url") if exposed else None,
+            }
+        )
+    payload["items"] = exposed_items
+    payload["total"] = len(exposed_items)
+    payload["completed"] = sum(
+        item.get("status") == "complete" for item in exposed_items
+    )
+    payload["failed"] = sum(
+        item.get("status") in {"failed", "interrupted", "missing"}
+        for item in exposed_items
+    )
+    payload["download_url"] = f"/api/batches/{batch['id']}/download"
+    payload["delivery_download_url"] = (
+        f"/api/batches/{batch['id']}/delivery/download"
+    )
+    payload["delivery_pdf_url"] = (
+        f"/api/batches/{batch['id']}/delivery/pdf"
+    )
+    return payload
+
+
 def clear_from(job: dict[str, Any], stage: str) -> None:
     index = pipeline.STAGES.index(stage)
     invalid = set(pipeline.STAGES[index:])
     job["artifacts"] = [item for item in job.get("artifacts", []) if item.get("stage") not in invalid]
+    if "generate" in invalid:
+        job["generation"] = None
+    if "key" in invalid:
+        job["key_metrics"] = None
+        job["background_removal"] = None
     if "components" in invalid:
         job["primitives"] = []
         job["groups"] = []
@@ -162,6 +525,8 @@ def clear_from(job: dict[str, Any], stage: str) -> None:
     if "layout" in invalid:
         job["candidates"] = []
         job["selected_candidate"] = None
+        job["pdf_status"] = None
+        job["pdf_error"] = None
     job["current_stage"] = pipeline.STAGES[max(0, index - 1)]
 
 
@@ -175,7 +540,7 @@ def _master_path(job: dict[str, Any]) -> Path:
         return directory / job["uploads"][job["input_mode"]]
     generated = directory / "generate" / "master.png"
     if not generated.exists():
-        raise RuntimeError("尚未生成纯色母版")
+        raise RuntimeError("尚未生成白底母版")
     return generated
 
 
@@ -192,7 +557,7 @@ def execute_job(job_id: str, through_stage: str, from_stage: str | None = None) 
         start_index = pipeline.STAGES.index(from_stage) if from_stage else 1
 
         if job["input_mode"] == "source" and through_index >= pipeline.STAGES.index("generate") and start_index <= pipeline.STAGES.index("generate"):
-            append_log(job, "调用内部 gpt-image-2 重建纯色底窗贴母版")
+            append_log(job, "调用内部 gpt-image-2 生成强衍生创新白底窗贴母版")
             stage_started = time.perf_counter()
             clear_from(job, "generate")
             source = directory / job["uploads"]["source"]
@@ -205,20 +570,37 @@ def execute_job(job_id: str, through_stage: str, from_stage: str | None = None) 
 
         if through_index >= pipeline.STAGES.index("key") and start_index <= pipeline.STAGES.index("key"):
             if job["input_mode"] == "alpha":
-                append_log(job, "保留上传文件原始 Alpha，跳过色键")
+                append_log(job, "保留上传文件原始 Alpha，跳过去背景")
             else:
-                append_log(job, "采样背景色并生成软 Alpha 蒙版")
+                append_log(job, "上传白底母版到七牛云，并调用 ComfyUI 去背景")
             stage_started = time.perf_counter()
             clear_from(job, "key")
             if job["input_mode"] == "alpha":
                 artifacts, metrics = pipeline.run_alpha_passthrough(_master_path(job), directory, settings)
             else:
-                artifacts, metrics = pipeline.run_chroma_key(_master_path(job), directory, settings)
+                transparent_path, raw_artifacts, removal_metadata = remove_background(
+                    _master_path(job), directory
+                )
+                artifacts, metrics = pipeline.run_alpha_passthrough(
+                    transparent_path, directory, settings
+                )
+                artifacts = [
+                    _artifact_from_external("key", item, directory)
+                    for item in raw_artifacts
+                ] + artifacts
+                metrics["mode"] = "comfyui_background_removal"
+                metrics["comfyui"] = removal_metadata
+                job["background_removal"] = removal_metadata
             pipeline.replace_stage_artifacts(job, "key", artifacts)
             job["key_metrics"] = metrics
             job["current_stage"] = "key"
             save_job(job)
-            append_log(job, f"色键阶段完成，用时 {time.perf_counter() - stage_started:.2f}s")
+            stage_label = {
+                "alpha": "Alpha 直通",
+                "source": "ComfyUI 去背景",
+                "master": "ComfyUI 去背景",
+            }[job["input_mode"]]
+            append_log(job, f"{stage_label}阶段完成，用时 {time.perf_counter() - stage_started:.2f}s")
 
         if through_index >= pipeline.STAGES.index("components") and start_index <= pipeline.STAGES.index("components"):
             append_log(job, "执行连通域分析并生成原始组件")
@@ -273,8 +655,30 @@ def execute_job(job_id: str, through_stage: str, from_stage: str | None = None) 
             pipeline.replace_stage_artifacts(job, "layout", artifacts)
             job["candidates"] = candidates
             job["selected_candidate"] = selected
+            pdf_requested = bool(job.get("render_pdf", True))
+            pdf_path = directory / "final" / "pdf" / "print-sheets.pdf"
+            final_manifest_path = directory / "final" / "layout.json"
+            pdf_error = None
+            if final_manifest_path.is_file():
+                final_manifest = json.loads(
+                    final_manifest_path.read_text(encoding="utf-8")
+                )
+                pdf_error = final_manifest.get("pdf_error")
+            job["pdf_status"] = (
+                "skipped"
+                if not pdf_requested
+                else "ready"
+                if pdf_path.is_file()
+                else "failed"
+            )
+            job["pdf_error"] = pdf_error
             job["current_stage"] = "layout"
             save_job(job)
+            if job["pdf_status"] == "failed":
+                append_log(
+                    job,
+                    f"PDF生成失败，不影响PNG交付：{pdf_error or '未生成PDF文件'}",
+                )
             append_log(job, f"排版阶段完成，用时 {time.perf_counter() - stage_started:.2f}s")
 
         job["status"] = "complete"
@@ -283,6 +687,71 @@ def execute_job(job_id: str, through_stage: str, from_stage: str | None = None) 
         job["status"] = "failed"
         job["error"] = str(exc)
         append_log(job, f"失败：{exc}")
+
+
+def _resume_stage(job: dict[str, Any]) -> str:
+    current = job.get("current_stage", "input")
+    if current not in pipeline.STAGES:
+        return "generate"
+    index = pipeline.STAGES.index(current)
+    if index >= pipeline.STAGES.index("layout"):
+        return "layout"
+    return pipeline.STAGES[index + 1]
+
+
+def execute_batch(batch_id: str) -> None:
+    batch = require_batch(batch_id)
+    try:
+        batch["status"] = "running"
+        batch["error"] = None
+        save_batch(batch)
+        for item in batch.get("items", []):
+            job = require_job(item["job_id"])
+            if job.get("status") == "complete":
+                item["status"] = "complete"
+                item["error"] = None
+                save_batch(batch)
+                continue
+            batch["current_job_id"] = job["id"]
+            item["status"] = "running"
+            item["error"] = None
+            save_batch(batch)
+            from_stage = (
+                None if job.get("status") == "ready" else _resume_stage(job)
+            )
+            job["status"] = "queued"
+            job["error"] = None
+            save_job(job)
+            execute_job(job["id"], "all", from_stage)
+            completed_job = require_job(job["id"])
+            item["status"] = completed_job.get("status")
+            item["error"] = completed_job.get("error")
+            save_batch(batch)
+
+        statuses = [
+            require_job(item["job_id"]).get("status")
+            for item in batch.get("items", [])
+        ]
+        if statuses and all(status == "complete" for status in statuses):
+            batch["status"] = "complete"
+        elif any(status == "complete" for status in statuses):
+            batch["status"] = "partial_success"
+        else:
+            batch["status"] = "failed"
+        batch["current_job_id"] = None
+        try:
+            assemble_delivery(batch)
+        except Exception as delivery_error:
+            delivery = _ensure_delivery_state(batch)
+            delivery["error"] = str(delivery_error)
+            if delivery.get("renderPdf"):
+                delivery["pdfStatus"] = "failed"
+        save_batch(batch)
+    except Exception as exc:
+        batch["status"] = "failed"
+        batch["error"] = str(exc)
+        batch["current_job_id"] = None
+        save_batch(batch)
 
 
 class RunRequest(BaseModel):
@@ -321,8 +790,346 @@ def defaults() -> dict[str, Any]:
         "settings": pipeline.default_settings(),
         "generation_prompt": DEFAULT_PROMPT,
         "generation_configured": generation_configured(),
+        "comfyui_configured": comfyui_configured(),
         "semantic_grouping_configured": semantic_grouping_configured(),
     }
+
+
+@app.get("/api/batches")
+def list_batches() -> list[dict[str, Any]]:
+    batches = sorted(
+        _batches.values(),
+        key=lambda item: item.get("created_at", ""),
+        reverse=True,
+    )
+    return [
+        {
+            "id": item["id"],
+            "status": item.get("status"),
+            "total": len(item.get("items", [])),
+            "completed": sum(
+                _jobs.get(child.get("job_id"), {}).get("status") == "complete"
+                for child in item.get("items", [])
+            ),
+            "created_at": item.get("created_at"),
+            "updated_at": item.get("updated_at"),
+            "pdf_status": _ensure_delivery_state(item).get("pdfStatus"),
+        }
+        for item in batches[:30]
+    ]
+
+
+@app.post("/api/batches")
+async def create_batch(
+    files: list[UploadFile] = File(...),
+    settings_json: str = Form("{}"),
+    generation_prompt: str = Form(DEFAULT_PROMPT),
+    render_pdf: bool = Form(True),
+) -> dict[str, Any]:
+    if not files:
+        raise HTTPException(status_code=400, detail="请至少上传一张电商原图")
+    if not generation_configured():
+        raise HTTPException(status_code=409, detail="gpt-image-2 尚未配置")
+    if not comfyui_configured():
+        raise HTTPException(status_code=409, detail="ComfyUI 去背景工作流尚未配置")
+
+    uploads: list[tuple[str, bytes]] = []
+    for file in files:
+        file_name = file.filename or "upload.png"
+        suffix = Path(file_name).suffix.lower()
+        if suffix not in ALLOWED_SUFFIXES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{file_name} 不是支持的图片格式",
+            )
+        content = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=f"{file_name} 超过 20 MB")
+        _validate_upload_bytes(content, "source")
+        uploads.append((file_name, content))
+
+    settings = _parse_settings(settings_json)
+    prompt = generation_prompt.strip() or DEFAULT_PROMPT
+    batch_id = f"batch-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    created = now_iso()
+    items: list[dict[str, Any]] = []
+    for file_name, content in uploads:
+        job = _create_job_record(
+            input_mode="source",
+            file_name=file_name,
+            content=content,
+            settings=json.loads(json.dumps(settings)),
+            generation_prompt=prompt,
+            batch_id=batch_id,
+            render_pdf=render_pdf,
+        )
+        items.append(
+            {
+                "job_id": job["id"],
+                "source_name": file_name,
+                "status": "queued",
+                "error": None,
+            }
+        )
+    batch = {
+        "schema_version": 2,
+        "id": batch_id,
+        "status": "queued",
+        "items": items,
+        "settings": settings,
+        "generation_prompt": prompt,
+        "delivery": {
+            "renderPdf": render_pdf,
+            "pdfStatus": "pending" if render_pdf else "skipped",
+            "generatedAt": None,
+            "files": [],
+            "error": None,
+        },
+        "current_job_id": None,
+        "error": None,
+        "created_at": created,
+        "updated_at": created,
+    }
+    save_batch(batch)
+    threading.Thread(
+        target=execute_batch,
+        args=(batch_id,),
+        daemon=True,
+    ).start()
+    return expose_batch(batch)
+
+
+@app.get("/api/batches/{batch_id}")
+def get_batch(batch_id: str) -> dict[str, Any]:
+    return expose_batch(require_batch(batch_id))
+
+
+@app.post("/api/batches/{batch_id}/retry")
+def retry_batch(batch_id: str) -> dict[str, Any]:
+    batch = require_batch(batch_id)
+    if batch.get("status") in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail="批次仍在运行")
+    incomplete = 0
+    for item in batch.get("items", []):
+        job = require_job(item["job_id"])
+        if job.get("status") == "complete":
+            item["status"] = "complete"
+            item["error"] = None
+            continue
+        incomplete += 1
+        item["status"] = "queued"
+        item["error"] = None
+    if not incomplete:
+        batch["status"] = "complete"
+        batch["error"] = None
+        save_batch(batch)
+        return expose_batch(batch)
+    batch["status"] = "queued"
+    batch["error"] = None
+    batch["current_job_id"] = None
+    delivery = _ensure_delivery_state(batch)
+    delivery["pdfStatus"] = (
+        "pending" if delivery.get("renderPdf") else "skipped"
+    )
+    delivery["generatedAt"] = None
+    delivery["files"] = []
+    delivery["error"] = None
+    save_batch(batch)
+    threading.Thread(
+        target=execute_batch,
+        args=(batch_id,),
+        daemon=True,
+    ).start()
+    return expose_batch(batch)
+
+
+def generate_batch_pdfs(batch_id: str) -> None:
+    batch = require_batch(batch_id)
+    delivery = _ensure_delivery_state(batch)
+    errors: list[str] = []
+    try:
+        delivery["renderPdf"] = True
+        delivery["pdfStatus"] = "rendering"
+        delivery["error"] = None
+        save_batch(batch)
+        for item in batch.get("items", []):
+            job = require_job(item["job_id"])
+            if job.get("status") != "complete":
+                continue
+            try:
+                outputs = pipeline.render_existing_pdfs(
+                    job_dir(job["id"]),
+                    pipeline.merge_settings(job.get("settings")),
+                )
+                job["render_pdf"] = True
+                job["pdf_status"] = "ready"
+                job["pdf_error"] = None
+                job["artifacts"] = [
+                    artifact
+                    for artifact in job.get("artifacts", [])
+                    if artifact.get("name") != "selected-pdf"
+                    and not artifact.get("name", "").startswith(
+                        "selected-pdf-page-"
+                    )
+                ]
+                pdf_artifacts = [
+                    artifact
+                    for artifact in pipeline.selected_output_artifacts(
+                        outputs,
+                        job_dir(job["id"]),
+                        "补生成方案",
+                    )
+                    if artifact.get("name") == "selected-pdf"
+                    or artifact.get("name", "").startswith(
+                        "selected-pdf-page-"
+                    )
+                ]
+                job["artifacts"].extend(pdf_artifacts)
+                save_job(job)
+            except Exception as exc:
+                job["render_pdf"] = True
+                job["pdf_status"] = "failed"
+                job["pdf_error"] = str(exc)
+                save_job(job)
+                errors.append(f"{item.get('source_name')}: {exc}")
+        assemble_delivery(batch)
+        delivery = _ensure_delivery_state(batch)
+        if errors:
+            delivery["pdfStatus"] = "failed"
+            delivery["error"] = "；".join(errors[:5])
+        save_batch(batch)
+    except Exception as exc:
+        delivery["pdfStatus"] = "failed"
+        delivery["error"] = str(exc)
+        save_batch(batch)
+
+
+@app.post("/api/batches/{batch_id}/delivery/pdf")
+def render_batch_delivery_pdfs(batch_id: str) -> dict[str, Any]:
+    batch = require_batch(batch_id)
+    if batch.get("status") in {"queued", "running"}:
+        raise HTTPException(
+            status_code=409,
+            detail="批次仍在运行，完成后才能补生成PDF",
+        )
+    if not any(
+        require_job(item["job_id"]).get("status") == "complete"
+        for item in batch.get("items", [])
+    ):
+        raise HTTPException(status_code=409, detail="没有可生成PDF的完成项")
+    delivery = _ensure_delivery_state(batch)
+    if delivery.get("pdfStatus") in {"queued", "rendering"}:
+        raise HTTPException(status_code=409, detail="PDF正在生成")
+    delivery["renderPdf"] = True
+    delivery["pdfStatus"] = "queued"
+    delivery["error"] = None
+    save_batch(batch)
+    threading.Thread(
+        target=generate_batch_pdfs,
+        args=(batch_id,),
+        daemon=True,
+    ).start()
+    return expose_batch(batch)
+
+
+@app.get("/api/batches/{batch_id}/delivery/download")
+def download_batch_delivery(batch_id: str) -> FileResponse:
+    batch = require_batch(batch_id)
+    if not any(
+        require_job(item["job_id"]).get("status") == "complete"
+        for item in batch.get("items", [])
+    ):
+        raise HTTPException(status_code=409, detail="没有可交付的完成项")
+    delivery = _ensure_delivery_state(batch)
+    if delivery.get("pdfStatus") in {"queued", "rendering"}:
+        raise HTTPException(status_code=409, detail="PDF仍在生成，请稍后下载")
+    assemble_delivery(batch)
+    save_batch(batch)
+    root = delivery_dir(batch_id)
+    archive = batch_dir(batch_id) / f"{batch_id}-delivery.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_STORED) as output:
+        output.writestr("PNG/", "")
+        output.writestr("PDF/", "")
+        for path in root.rglob("*"):
+            if path.is_file():
+                output.write(path, path.relative_to(root).as_posix())
+    return FileResponse(
+        archive,
+        media_type="application/zip",
+        filename=archive.name,
+    )
+
+
+@app.get("/api/batches/{batch_id}/download")
+def download_batch(batch_id: str) -> FileResponse:
+    batch = require_batch(batch_id)
+    root = batch_dir(batch_id)
+    archive = root / f"{batch_id}-results.zip"
+    summary: dict[str, Any] = {
+        "batch_id": batch_id,
+        "status": batch.get("status"),
+        "items": [],
+    }
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
+        for index, item in enumerate(batch.get("items", []), start=1):
+            job = require_job(item["job_id"])
+            if job.get("status") != "complete":
+                continue
+            source_stem = re.sub(
+                r"[^\w.-]+",
+                "-",
+                Path(item.get("source_name") or f"item-{index}").stem,
+            ).strip("-") or f"item-{index}"
+            prefix = f"{index:03d}-{source_stem}"
+            directory = job_dir(job["id"])
+            master = directory / "generate" / "master.png"
+            if master.is_file():
+                output.write(master, f"{prefix}/innovation-master.png")
+            final_root = directory / "final"
+            if final_root.is_dir():
+                for path in final_root.rglob("*"):
+                    if path.is_file():
+                        output.write(
+                            path,
+                            f"{prefix}/final/{path.relative_to(final_root).as_posix()}",
+                        )
+            selected = next(
+                (
+                    candidate
+                    for candidate in job.get("candidates", [])
+                    if candidate.get("id") == job.get("selected_candidate")
+                ),
+                None,
+            )
+            if selected:
+                selected_path = (
+                    directory
+                    / "layout"
+                    / selected["id"]
+                    / "layout.json"
+                )
+                if selected_path.is_file():
+                    output.write(
+                        selected_path,
+                        f"{prefix}/selected-layout.json",
+                    )
+            summary["items"].append(
+                {
+                    "source_name": item.get("source_name"),
+                    "job_id": job["id"],
+                    "selected_candidate": job.get("selected_candidate"),
+                    "selected_score": selected.get("score") if selected else None,
+                }
+            )
+        output.writestr(
+            "batch-summary.json",
+            json.dumps(summary, ensure_ascii=False, indent=2),
+        )
+    return FileResponse(
+        archive,
+        media_type="application/zip",
+        filename=archive.name,
+    )
 
 
 @app.get("/api/jobs")
@@ -341,37 +1148,29 @@ def list_jobs() -> list[dict[str, Any]]:
     ]
 
 
-@app.post("/api/jobs")
-async def create_job(
-    input_mode: Literal["source", "master", "alpha"] = Form(...),
-    file: UploadFile = File(...),
-    settings_json: str = Form("{}"),
-    generation_prompt: str = Form(DEFAULT_PROMPT),
-) -> dict[str, Any]:
-    suffix = Path(file.filename or "upload.png").suffix.lower()
-    if suffix not in ALLOWED_SUFFIXES:
-        raise HTTPException(status_code=400, detail="仅支持 PNG、JPG、JPEG、WEBP")
-    content = await file.read(MAX_UPLOAD_BYTES + 1)
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="文件不能超过 20 MB")
+def _parse_settings(settings_json: str) -> dict[str, Any]:
     try:
-        settings = pipeline.merge_settings(json.loads(settings_json or "{}"))
+        return pipeline.merge_settings(json.loads(settings_json or "{}"))
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail="settings_json 格式错误") from exc
-    job_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
-    directory = job_dir(job_id)
-    directory.mkdir(parents=True, exist_ok=True)
-    upload_name = f"upload-{input_mode}{suffix}"
-    upload_path = directory / upload_name
-    upload_path.write_bytes(content)
-    try:
-        from PIL import Image
 
-        with Image.open(upload_path) as image:
+
+def _validate_upload_bytes(
+    content: bytes,
+    input_mode: Literal["source", "master", "alpha"],
+) -> None:
+    from io import BytesIO
+    from PIL import Image
+
+    try:
+        with Image.open(BytesIO(content)) as image:
             image.verify()
         if input_mode == "alpha":
-            with Image.open(upload_path) as image:
-                has_alpha = "A" in image.getbands() or image.info.get("transparency") is not None
+            with Image.open(BytesIO(content)) as image:
+                has_alpha = (
+                    "A" in image.getbands()
+                    or image.info.get("transparency") is not None
+                )
                 if not has_alpha:
                     raise ValueError("没有 Alpha 通道")
                 alpha = image.convert("RGBA").getchannel("A")
@@ -381,18 +1180,55 @@ async def create_job(
                 if alpha_min == 255:
                     raise ValueError("Alpha 全部不透明")
     except Exception as exc:
-        upload_path.unlink(missing_ok=True)
-        detail = f"透明底图片无效：{exc}" if input_mode == "alpha" else "上传文件不是有效图片"
+        detail = (
+            f"透明底图片无效：{exc}"
+            if input_mode == "alpha"
+            else "上传文件不是有效图片"
+        )
         raise HTTPException(status_code=400, detail=detail) from exc
+
+
+def _create_job_record(
+    *,
+    input_mode: Literal["source", "master", "alpha"],
+    file_name: str,
+    content: bytes,
+    settings: dict[str, Any],
+    generation_prompt: str,
+    batch_id: str | None = None,
+    render_pdf: bool = True,
+) -> dict[str, Any]:
+    suffix = Path(file_name or "upload.png").suffix.lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        raise HTTPException(status_code=400, detail="仅支持 PNG、JPG、JPEG、WEBP")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"{file_name} 超过 20 MB")
+    _validate_upload_bytes(content, input_mode)
+
+    job_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    directory = job_dir(job_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    upload_name = f"upload-{input_mode}{suffix}"
+    upload_path = directory / upload_name
+    upload_path.write_bytes(content)
     created = now_iso()
     job = {
         "id": job_id,
+        "batch_id": batch_id,
+        "source_name": file_name,
         "status": "ready",
         "input_mode": input_mode,
+        "selection_mode": (
+            "highest_score" if input_mode == "source" else "production_rank"
+        ),
         "uploads": {input_mode: upload_name},
         "settings": settings,
         "generation_prompt": generation_prompt.strip() or DEFAULT_PROMPT,
+        "render_pdf": bool(render_pdf),
+        "pdf_status": None,
+        "pdf_error": None,
         "generation": None,
+        "background_removal": None,
         "key_metrics": None,
         "semantic_grouping": None,
         "primitives": [],
@@ -401,19 +1237,45 @@ async def create_job(
         "candidates": [],
         "selected_candidate": None,
         "current_stage": "input",
-        "artifacts": [pipeline.artifact(
-            "input",
-            "upload",
-            {"source": "上传的电商图", "master": "上传的纯色母版", "alpha": "上传的透明底母版"}[input_mode],
-            upload_path,
-            directory,
-        )],
-        "logs": [f"[{datetime.now().strftime('%H:%M:%S')}] 创建任务，输入模式：{input_mode}"],
+        "artifacts": [
+            pipeline.artifact(
+                "input",
+                "upload",
+                {
+                    "source": "上传的电商图",
+                    "master": "上传的白底母版",
+                    "alpha": "上传的透明底母版",
+                }[input_mode],
+                upload_path,
+                directory,
+            )
+        ],
+        "logs": [
+            f"[{datetime.now().strftime('%H:%M:%S')}] 创建任务，输入模式：{input_mode}"
+        ],
         "error": None,
         "created_at": created,
         "updated_at": created,
     }
     save_job(job)
+    return job
+
+
+@app.post("/api/jobs")
+async def create_job(
+    input_mode: Literal["source", "master", "alpha"] = Form(...),
+    file: UploadFile = File(...),
+    settings_json: str = Form("{}"),
+    generation_prompt: str = Form(DEFAULT_PROMPT),
+) -> dict[str, Any]:
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    job = _create_job_record(
+        input_mode=input_mode,
+        file_name=file.filename or "upload.png",
+        content=content,
+        settings=_parse_settings(settings_json),
+        generation_prompt=generation_prompt,
+    )
     return expose_job(job)
 
 
@@ -445,17 +1307,16 @@ def update_settings(job_id: str, patch: SettingsPatch) -> dict[str, Any]:
     old = pipeline.merge_settings(job.get("settings"))
     new = pipeline.merge_settings({**old, **patch.settings})
     job["settings"] = new
-    key_fields = {"key_low", "key_high", "morph_kernel", "min_component_area", "alpha_threshold"}
+    key_fields: set[str] = set()
     component_fields = {
         "install_width_mm", "install_height_mm", "group_gap_mm",
+        "content_occupancy_ratio",
         "semantic_grouping_enabled", "semantic_min_confidence",
+        "min_component_area", "alpha_threshold",
     }
     geometry_fields = {"cut_offset_mm", "spacing_mm", "simplify_mm"}
     changed = {key for key in new if new.get(key) != old.get(key)}
-    if job.get("input_mode") == "alpha":
-        changed -= {"key_low", "key_high", "morph_kernel"}
-        key_fields = set()
-        component_fields |= {"min_component_area", "alpha_threshold"}
+    changed -= {"key_low", "key_high", "morph_kernel"}
     if changed & key_fields:
         clear_from(job, "key")
     elif changed & component_fields:
@@ -560,7 +1421,13 @@ def select_candidate(job_id: str, candidate_id: str) -> dict[str, Any]:
     candidate = next((item for item in job.get("candidates", []) if item["id"] == candidate_id), None)
     if not candidate:
         raise HTTPException(status_code=404, detail="候选方案不存在")
-    outputs = pipeline.render_selected_outputs(candidate, job.get("geometry", []), job_dir(job_id), job["settings"])
+    outputs = pipeline.render_selected_outputs(
+        candidate,
+        job.get("geometry", []),
+        job_dir(job_id),
+        job["settings"],
+        render_pdf=bool(job.get("render_pdf", True)),
+    )
     selected_names = {"selected-transparent", "selected-white", "selected-pdf"}
     job["artifacts"] = [
         item for item in job.get("artifacts", [])
@@ -568,7 +1435,22 @@ def select_candidate(job_id: str, candidate_id: str) -> dict[str, Any]:
     ]
     job["artifacts"].extend(pipeline.selected_output_artifacts(outputs, job_dir(job_id), "手动选中方案"))
     job["selected_candidate"] = candidate_id
-    append_log(job, f"手动选择候选方案：{candidate_id}；已生成 {len(outputs['page_pdfs'])} 张单页 PDF 和 1 份多页 PDF")
+    job["pdf_status"] = (
+        "ready"
+        if outputs.get("combined_pdf")
+        else "failed"
+        if outputs.get("pdf_error")
+        else "skipped"
+    )
+    job["pdf_error"] = outputs.get("pdf_error")
+    pdf_note = (
+        f"已生成 {len(outputs['page_pdfs'])} 张单页 PDF 和 1 份多页 PDF"
+        if outputs.get("combined_pdf")
+        else "未请求PDF"
+        if job["pdf_status"] == "skipped"
+        else f"PDF生成失败：{job['pdf_error']}"
+    )
+    append_log(job, f"手动选择候选方案：{candidate_id}；{pdf_note}")
     return expose_job(job)
 
 

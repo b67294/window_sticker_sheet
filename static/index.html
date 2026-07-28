@@ -24,17 +24,18 @@
         <section class="panel-block">
           <div class="section-title"><span>01</span>输入</div>
           <div class="segmented" id="input-mode">
-            <button type="button" data-value="master" class="active">纯色母版</button>
+            <button type="button" data-value="master" class="active">白底母版</button>
             <button type="button" data-value="alpha">透明 PNG</button>
             <button type="button" data-value="source">电商原图</button>
           </div>
-          <small class="mode-note" id="input-mode-note">从纯色背景计算 Alpha。</small>
+          <small class="mode-note" id="input-mode-note">上传白底母版，通过 ComfyUI 去背景。</small>
           <label class="dropzone">
             <input id="file" type="file" accept="image/png,image/jpeg,image/webp" required>
             <span class="drop-icon">＋</span>
             <strong>选择或拖入图片</strong>
             <small id="file-name">PNG / JPG / WEBP · 最大 20MB</small>
           </label>
+          <div id="upload-list" class="upload-list" hidden></div>
           <details id="prompt-details" hidden>
             <summary>编辑生图 Prompt</summary>
             <textarea id="generation-prompt" rows="8"></textarea>
@@ -43,12 +44,24 @@
 
         <section class="panel-block">
           <div class="section-title"><span>02</span>物理规格</div>
+          <label>推荐铺贴规格
+            <select id="size-preset">
+              <option value="small" selected>小号 · 600×900 mm（默认）</option>
+              <option value="standard">标准 · 800×1200 mm</option>
+              <option value="large">大号 · 1000×1500 mm</option>
+              <option value="custom">自定义</option>
+            </select>
+          </label>
           <div class="field-grid two">
-            <label>安装宽 mm<input data-setting="install_width_mm" type="number" min="10" step="1"></label>
-            <label>安装高 mm<input data-setting="install_height_mm" type="number" min="10" step="1"></label>
+            <label>推荐铺贴宽度 mm<input id="install-width" data-setting="install_width_mm" type="number" min="10" step="1"></label>
+            <label>推荐铺贴高度 mm<input id="install-height" data-setting="install_height_mm" type="number" min="10" step="1"></label>
             <label>Sheet 宽 mm<input data-setting="sheet_width_mm" type="number" min="20" step="0.1"></label>
             <label>Sheet 高 mm<input data-setting="sheet_height_mm" type="number" min="20" step="0.1"></label>
           </div>
+          <label class="occupancy-field">图案占推荐范围
+            <input data-setting="content_occupancy_ratio" data-setting-transform="percent" type="number" min="50" max="100" step="1">
+            <small>程序会忽略参考图白边，默认让有效图案占推荐铺贴范围的85%。</small>
+          </label>
           <div class="field-grid three">
             <label title="纸张四周禁止放置贴纸的安全区域">纸张边缘安全区<input data-setting="sheet_margin_mm" type="number" min="0" step="0.1"></label>
             <label>裁切外扩<input data-setting="cut_offset_mm" type="number" min="0" step="0.1"></label>
@@ -57,10 +70,8 @@
         </section>
 
         <section class="panel-block">
-          <div class="section-title"><span>03</span><i id="key-settings-title">色键与组件</i></div>
+          <div class="section-title"><span>03</span><i id="key-settings-title">去背景与组件</i></div>
           <div class="field-grid two">
-            <label>背景低阈值<input data-setting="key_low" type="number" min="0" max="255" step="1"></label>
-            <label>背景高阈值<input data-setting="key_high" type="number" min="1" max="441" step="1"></label>
             <label>最小组件 px<input data-setting="min_component_area" type="number" min="1" step="1"></label>
             <label>合并距离 mm<input data-setting="group_gap_mm" type="number" min="0" step="0.1"></label>
           </div>
@@ -93,6 +104,11 @@
             <label>视觉平衡权重 <output id="balance-output">10%</output></label>
             <input id="balance-weight" data-setting="balance_weight" type="range" min="0" max="1" step="0.05">
           </div>
+          <label id="batch-pdf-option" class="check-row delivery-option" hidden>
+            <input id="render-pdf" type="checkbox" checked>
+            批量完成时生成交付PDF
+            <small>默认开启；关闭后可在批次完成后补生成，不会重新生图。</small>
+          </label>
         </section>
 
         <button class="primary large" id="create-run" type="submit">创建并运行完整链路 <span>→</span></button>
@@ -108,7 +124,7 @@
         </div>
         <div class="workspace-actions">
           <select id="through-stage" aria-label="运行到阶段">
-            <option value="key" id="key-stage-option">运行到色键</option>
+            <option value="key" id="key-stage-option">运行到去背景</option>
             <option value="components">运行到组件</option>
             <option value="geometry">运行到轮廓</option>
             <option value="layout" selected>运行到排版</option>
@@ -118,10 +134,28 @@
         </div>
       </div>
 
+      <section id="batch-view" class="batch-view" hidden>
+        <div class="batch-summary">
+          <div>
+            <span class="eyebrow dark">BATCH PRODUCTION</span>
+            <h2 id="batch-title">批量创新任务</h2>
+            <p id="batch-progress-text">等待开始</p>
+          </div>
+          <div class="batch-actions">
+            <button id="retry-batch" class="secondary" hidden>重试失败项</button>
+            <button id="render-batch-pdf" class="secondary" hidden>补生成全部PDF</button>
+            <a id="download-batch" class="primary disabled" href="#">下载产品交付包</a>
+            <a id="download-batch-archive" class="secondary disabled" href="#">完整归档</a>
+          </div>
+        </div>
+        <div class="batch-progress"><i id="batch-progress-bar"></i></div>
+        <div id="batch-grid" class="batch-grid"></div>
+      </section>
+
       <nav class="stepper" id="stepper">
         <button data-stage="input" class="active"><b>1</b><span>输入</span></button>
-        <button data-stage="generate"><b>2</b><span>母版</span></button>
-        <button data-stage="key"><b>3</b><span id="key-step-label">色键</span></button>
+        <button data-stage="generate"><b>2</b><span>创新白底母版</span></button>
+        <button data-stage="key"><b>3</b><span id="key-step-label">去背景</span></button>
         <button data-stage="components"><b>4</b><span>组件</span></button>
         <button data-stage="geometry"><b>5</b><span>轮廓</span></button>
         <button data-stage="layout"><b>6</b><span>候选</span></button>
@@ -130,7 +164,7 @@
       <section id="empty" class="empty-state">
         <div class="empty-graphic"><i></i><i></i><i></i></div>
         <h2>把每一步都摊开来看</h2>
-        <p>上传纯绿底母版可直接调试算法；上传电商图则先调用生图服务重建母版。</p>
+        <p>上传白底母版可直接调试算法；上传电商图会先调用生图服务强衍生创新，再自动完成去背景、组件与候选排版。</p>
       </section>
 
       <section id="stage-view" hidden>
@@ -176,6 +210,6 @@
   </dialog>
 
   <div id="toast" class="toast"></div>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=20260728-2"></script>
 </body>
 </html>

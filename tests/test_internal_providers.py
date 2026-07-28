@@ -31,9 +31,18 @@ def image_bytes(mode="RGB"):
     return output.getvalue()
 
 
+def test_default_prompt_is_strong_derivative_white_background_contract():
+    prompt = generation.DEFAULT_PROMPT
+    assert "至少明显改变四项" in prompt
+    assert "不要一比一复刻" in prompt
+    assert "#ffffff" in prompt
+    assert "彼此不接触" in prompt
+
+
 def test_direct_image_provider_uploads_reference_and_saves_trace(tmp_path, monkeypatch):
     source = tmp_path / "source.png"
     source.write_bytes(image_bytes())
+    monkeypatch.setenv("LP_IMAGE_PROVIDER", "direct")
     monkeypatch.setenv("LP_IMAGE_DIRECT_URL", "https://image.example/generate")
     monkeypatch.setenv("LP_IMAGE_UPLOAD_URL", "https://upload.example/image")
     monkeypatch.setenv("LP_IMAGE_SIZE", "1024x1024")

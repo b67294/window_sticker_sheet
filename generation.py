@@ -13,11 +13,19 @@ import requests
 from PIL import Image
 
 
-DEFAULT_PROMPT = """参考输入电商图片，重建其中的窗贴设计为干净的正视平面素材母版。
-保留原始主题、配色、图案类别、相对尺寸、数量、文字和整体风格；删除窗户、玻璃、墙面、户外背景、反光、阴影、包装和商品场景。
-所有独立图案必须完整、彼此不接触、不重叠，并保留足够空隙。不得裁切任何图案，不得增加品牌、Logo、IP角色或水印。
-背景必须是完全均匀的纯 #ff00ff 色，不得有渐变、纹理、光照变化和阴影，图案内部不得使用该颜色。
-输出单张正视平面窗贴素材图，不要输出商品效果图。"""
+DEFAULT_PROMPT = """参考输入的电商原图，为其中的窗贴图案创作同系列但差异明显的全新款式，并输出为干净的正视平面白底素材母版。
+
+保留原设计的节庆或内容主题、窗贴产品类型、主角类别、核心识别点和整体画风方向；不要一比一复刻原图。
+必须在以下维度中至少明显改变四项：主体造型、动作姿态、道具组合、辅助元素、次级配色、元素组合关系、画面叙事。不得只做轻微换色、替换小装饰、镜像、缩放或简单重排。
+结果应像同一商品系列中的全新设计，而不是原图改版。
+
+保持与原图相近的独立图案数量级、大小层级和商品信息量，使其适合后续拆分为窗贴组件。
+所有独立图案必须完整、彼此不接触、不重叠，图案之间保留清晰且足够的白色间隔；不得裁切任何主体。
+如果原图包含清晰可辨的主题文字，只在能够逐字准确保留时使用；无法可靠识别时不要生成文字。不得新增品牌、Logo、水印、受保护IP角色或无关文字。
+
+背景必须是完全均匀的纯白色（#ffffff），不得有渐变、纹理、光照变化或阴影。图案边缘必须清晰，不得出现白色描边或白色光晕。
+删除窗户、玻璃、墙面、户外背景、包装、商品场景、透视、反光和摄影阴影。
+只输出一张正视二维平面窗贴素材母版，不要输出商品效果图或展示样机。"""
 
 DEFAULT_DIRECT_URL = "https://gptapi.longpean.com/gptImage/generateImageDirect"
 DEFAULT_UPLOAD_URL = "https://stpic.longpean.com/picture/upLoadQiNiu"
@@ -119,7 +127,7 @@ def _headers(token: str = "") -> dict[str, str]:
     return headers
 
 
-def _upload_reference(source_path: Path) -> tuple[str, dict[str, Any]]:
+def upload_image_to_cloud(source_path: Path) -> tuple[str, dict[str, Any]]:
     upload_url = os.getenv("LP_IMAGE_UPLOAD_URL", DEFAULT_UPLOAD_URL).strip()
     if not upload_url:
         raise RuntimeError("未配置 LP_IMAGE_UPLOAD_URL；插件生图只接受远端 HTTP 参考图")
@@ -147,6 +155,10 @@ def _upload_reference(source_path: Path) -> tuple[str, dict[str, Any]]:
     if not isinstance(url, str) or not url.startswith(("http://", "https://")):
         raise RuntimeError("参考图上传响应中没有找到可访问的 HTTP 图片 URL")
     return url, payload
+
+
+# Keep the private name for compatibility with older callers and tests.
+_upload_reference = upload_image_to_cloud
 
 
 def _choose_generation_size(source_path: Path) -> str:
@@ -218,7 +230,7 @@ def _generate_master_direct(source_path: Path, job_dir: Path, custom_prompt: str
         {"name": "generation-upload", "label": "参考图上传响应", "path": stage_dir / "upload-response.json", "kind": "json"},
         {"name": "generation-response", "label": "插件生图原始响应", "path": stage_dir / "raw-response.json", "kind": "json"},
         {"name": "generation-prompt", "label": "生图 Prompt", "path": stage_dir / "prompt.txt", "kind": "text"},
-        {"name": "master", "label": "生成的纯色母版", "path": master_path, "kind": "image"},
+        {"name": "master", "label": "创新白底母版", "path": master_path, "kind": "image"},
     ]
     metadata = {
         "provider": "codex-gpt-image-2-direct",
@@ -294,7 +306,7 @@ def _generate_master_chat_compat(source_path: Path, job_dir: Path, custom_prompt
         {"name": "generation-request", "label": "生图请求摘要", "path": request_path, "kind": "json"},
         {"name": "generation-response", "label": "生图原始响应", "path": raw_path, "kind": "json"},
         {"name": "generation-prompt", "label": "生图 Prompt", "path": prompt_path, "kind": "text"},
-        {"name": "master", "label": "生成的纯色母版", "path": master_path, "kind": "image"},
+        {"name": "master", "label": "创新白底母版", "path": master_path, "kind": "image"},
     ]
     metadata = {"model": model, "endpoint": endpoint, "prompt": prompt}
     return master_path, artifacts, metadata

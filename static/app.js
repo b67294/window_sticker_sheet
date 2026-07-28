@@ -1,15 +1,21 @@
 const $ = (id) => document.getElementById(id);
 const stages = ["input", "generate", "key", "components", "geometry", "layout"];
-const stageNames = { input: "输入", generate: "纯色母版", key: "色键与 Alpha", components: "像素组件", geometry: "分组与轮廓", layout: "候选 Sheet" };
+const stageNames = { input: "输入", generate: "创新白底母版", key: "去背景与 Alpha", components: "像素组件", geometry: "分组与轮廓", layout: "候选 Sheet" };
 const inputModeNotes = {
-  master: "从纯色背景计算 Alpha。",
-  alpha: "完整保留原始软 Alpha，跳过色键；仅接受带透明通道的 PNG / WEBP。",
-  source: "先调用生成服务重建母版，再执行 Alpha 提取。",
+  master: "上传白底母版，通过 ComfyUI 去背景。",
+  alpha: "完整保留原始软 Alpha，跳过去背景；仅接受带透明通道的 PNG / WEBP。",
+  source: "可一次选择多张图；先逐张强衍生创新为白底母版，再自动去背景、提取组件并选择总分最高候选。",
 };
-const inputModeNames = { master: "纯色母版", alpha: "透明 PNG", source: "电商原图" };
+const inputModeNames = { master: "白底母版", alpha: "透明 PNG", source: "电商原图" };
+const sizePresets = {
+  small: [600, 900],
+  standard: [800, 1200],
+  large: [1000, 1500],
+};
 
 let defaults = null;
 let currentJob = null;
+let currentBatch = null;
 let activeStage = "input";
 let inputMode = "master";
 let selectedGroups = new Set();
@@ -39,19 +45,50 @@ function setInputMode(value) {
   $("prompt-details").hidden = value !== "source";
   $("input-mode-note").textContent = inputModeNotes[value] || "";
   $("file").accept = value === "alpha" ? "image/png,image/webp" : "image/png,image/jpeg,image/webp";
-  document.querySelectorAll('[data-setting="key_low"], [data-setting="key_high"]').forEach((input) => {
-    input.disabled = value === "alpha";
-    input.title = value === "alpha" ? "透明图片保留原始 Alpha，不使用色键阈值" : "";
-  });
-  $("key-settings-title").textContent = value === "alpha" ? "Alpha 与组件" : "色键与组件";
-  $("key-step-label").textContent = value === "alpha" ? "Alpha 直通" : "色键";
-  $("key-stage-option").textContent = value === "alpha" ? "运行到 Alpha 直通" : "运行到色键";
+  $("file").multiple = value === "source";
+  $("batch-pdf-option").hidden = value !== "source";
+  if (value !== "source" && $("file").files.length > 1) {
+    $("file").value = "";
+    pendingUpload = false;
+    renderUploadList();
+  }
+  $("key-settings-title").textContent = value === "alpha" ? "Alpha 与组件" : "ComfyUI 去背景与组件";
+  $("key-step-label").textContent = value === "alpha" ? "Alpha 直通" : "去背景";
+  $("key-stage-option").textContent = value === "alpha" ? "运行到 Alpha 直通" : "运行到去背景";
   if (activeStage === "key") $("stage-title").textContent = displayStageName("key", value);
   if (pendingUpload) markPendingUpload();
 }
 
+function selectedFiles() {
+  return Array.from($("file").files || []);
+}
+
+function updateCreateButton() {
+  const count = selectedFiles().length;
+  $("create-run").innerHTML = inputMode === "source" && count > 1
+    ? `批量创新并生成候选（${count}张） <span>→</span>`
+    : `创建并运行完整链路 <span>→</span>`;
+}
+
+function renderUploadList() {
+  const files = selectedFiles();
+  const list = $("upload-list");
+  list.hidden = files.length < 2;
+  list.innerHTML = files.map((file) => `
+    <div class="upload-item">
+      <img src="${URL.createObjectURL(file)}" alt="">
+      <span title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+      <small>${(file.size / 1024 / 1024).toFixed(1)} MB</small>
+    </div>`).join("");
+  $("file-name").textContent = files.length > 1
+    ? `已选择 ${files.length} 张图片`
+    : files[0]?.name || "PNG / JPG / WEBP · 最大 20MB";
+  updateCreateButton();
+}
+
 function displayStageName(stage, mode = pendingUpload ? inputMode : (currentJob?.input_mode || inputMode)) {
   if (stage === "key" && mode === "alpha") return "Alpha 直通";
+  if (stage === "key" && mode !== "alpha") return "ComfyUI 去背景";
   return stageNames[stage] || stage;
 }
 
@@ -63,7 +100,22 @@ function populateSettings(settings) {
     else if (input.dataset.settingTransform === "percent") input.value = Number(settings[key]) * 100;
     else input.value = settings[key];
   });
+  syncSizePreset();
   updateWeightOutputs();
+}
+
+function syncSizePreset() {
+  const width = Number($("install-width").value);
+  const height = Number($("install-height").value);
+  const match = Object.entries(sizePresets).find(([, values]) => values[0] === width && values[1] === height);
+  $("size-preset").value = match?.[0] || "custom";
+}
+
+function applySizePreset() {
+  const values = sizePresets[$("size-preset").value];
+  if (!values) return;
+  $("install-width").value = values[0];
+  $("install-height").value = values[1];
 }
 
 function collectSettings() {
@@ -99,6 +151,7 @@ function setActiveStage(stage) {
 }
 
 function renderJob(job) {
+  currentBatch = null;
   currentJob = job;
   if (pendingUpload) {
     if (["queued", "running"].includes(job.status)) schedulePoll();
@@ -107,6 +160,9 @@ function renderJob(job) {
   setInputMode(job.input_mode || inputMode);
   populateSettings(job.settings || defaults?.settings || {});
   localStorage.setItem("windowStickerJobId", job.id);
+  localStorage.removeItem("windowStickerBatchId");
+  $("batch-view").hidden = true;
+  $("stepper").hidden = false;
   $("empty").hidden = true;
   $("stage-view").hidden = false;
   $("job-title").textContent = job.id;
@@ -116,6 +172,7 @@ function renderJob(job) {
   status.className = `status ${job.status === "ready" ? "idle" : job.status}`;
   const jobLocked = ["running", "queued"].includes(job.status);
   $("rerun").disabled = jobLocked;
+  $("run-stage").disabled = jobLocked;
   document.querySelectorAll("[data-group-action]").forEach((button) => { button.disabled = jobLocked; });
   $("download").classList.toggle("disabled", !job.artifacts?.length);
   $("download").href = job.download_url;
@@ -124,6 +181,80 @@ function renderJob(job) {
   renderArtifacts();
   renderSpecialPanels();
   if (["queued", "running"].includes(job.status)) schedulePoll();
+}
+
+function batchStatusLabel(status) {
+  return ({
+    queued: "排队中", running: "批量运行中", complete: "已完成",
+    partial_success: "部分成功", failed: "失败", interrupted: "已中断",
+  })[status] || status;
+}
+
+function renderBatch(batch) {
+  currentBatch = batch;
+  currentJob = null;
+  pendingUpload = false;
+  localStorage.setItem("windowStickerBatchId", batch.id);
+  localStorage.removeItem("windowStickerJobId");
+  $("empty").hidden = true;
+  $("stage-view").hidden = true;
+  $("stepper").hidden = true;
+  $("log-panel").hidden = true;
+  $("batch-view").hidden = false;
+  $("job-title").textContent = batch.id;
+  $("job-note").textContent = batch.error || `共 ${batch.total} 张，逐张串行执行；单张失败不会阻塞后续图片。`;
+  const status = $("status");
+  status.textContent = batchStatusLabel(batch.status);
+  status.className = `status ${batch.status}`;
+  $("rerun").disabled = true;
+  $("run-stage").disabled = true;
+  $("download").classList.add("disabled");
+  $("batch-title").textContent = `批次 ${batch.id}`;
+  const pdfStatus = batch.delivery?.pdfStatus || "pending";
+  const pdfStatusText = ({
+    pending: "PDF等待生成", queued: "PDF排队中", rendering: "PDF生成中",
+    ready: "PDF已就绪", skipped: "已跳过PDF", failed: "部分PDF失败",
+  })[pdfStatus] || pdfStatus;
+  $("batch-progress-text").textContent = `${batch.completed}/${batch.total} 张完成${batch.failed ? ` · ${batch.failed} 张待重试` : ""} · ${pdfStatusText}`;
+  $("batch-progress-bar").style.width = `${batch.total ? batch.completed / batch.total * 100 : 0}%`;
+  const pdfBusy = ["queued", "rendering"].includes(pdfStatus);
+  const terminal = ["complete", "partial_success", "failed", "interrupted"].includes(batch.status);
+  $("download-batch").href = batch.delivery_download_url || "#";
+  $("download-batch").classList.toggle("disabled", !batch.completed || pdfBusy);
+  $("download-batch-archive").href = batch.download_url || "#";
+  $("download-batch-archive").classList.toggle("disabled", !batch.completed);
+  $("render-batch-pdf").hidden = !terminal || !batch.completed || pdfStatus === "ready";
+  $("render-batch-pdf").disabled = pdfBusy;
+  $("render-batch-pdf").textContent = pdfStatus === "failed" ? "重试生成PDF" : pdfBusy ? "PDF生成中…" : "补生成全部PDF";
+  $("retry-batch").hidden = !["partial_success", "failed", "interrupted"].includes(batch.status);
+  $("batch-grid").innerHTML = (batch.items || []).map((item, index) => `
+    <article class="batch-card">
+      <div class="batch-card-head">
+        <strong>${index + 1}. ${escapeHtml(item.source_name)}</strong>
+        <span class="status ${item.status}">${batchStatusLabel(item.status)}</span>
+      </div>
+      <div class="batch-images">
+        ${batchImage(item.source_url, "电商原图")}
+        ${batchImage(item.master_url, "创新白底图")}
+        ${batchImage(item.candidate_url, "最高分候选")}
+      </div>
+      <div class="batch-card-meta">
+        <span>阶段：${escapeHtml(displayStageName(item.current_stage || "input", "source"))}</span>
+        ${item.selected_score !== null && item.selected_score !== undefined ? `<b>总分 ${formatPercent(item.selected_score)}</b>` : ""}
+      </div>
+      ${item.error ? `<p class="batch-error">${escapeHtml(item.error)}</p>` : ""}
+      <div class="batch-card-links">
+        ${item.final_pdf_url ? `<a href="${item.final_pdf_url}" target="_blank">最终 PDF</a>` : ""}
+        ${item.job_download_url && item.status === "complete" ? `<a href="${item.job_download_url}">单张 ZIP</a>` : ""}
+      </div>
+    </article>`).join("");
+  if (["queued", "running"].includes(batch.status) || pdfBusy) scheduleBatchPoll();
+}
+
+function batchImage(url, label) {
+  return url
+    ? `<a href="${url}" target="_blank"><img src="${url}" alt="${label}"><small>${label}</small></a>`
+    : `<div class="batch-placeholder"><span>等待生成</span><small>${label}</small></div>`;
 }
 
 function renderArtifacts() {
@@ -275,19 +406,26 @@ function formatPercent(value) { return `${(Number(value || 0) * 100).toFixed(1)}
 function escapeHtml(value) { return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]); }
 
 function markPendingUpload() {
-  const file = $("file").files[0];
+  const files = selectedFiles();
+  const file = files[0];
   if (!file) return;
   if (!pendingUpload && defaults?.settings) populateSettings(defaults.settings);
   pendingUpload = true;
+  currentBatch = null;
   clearTimeout(pollTimer);
+  $("batch-view").hidden = true;
+  $("stepper").hidden = false;
   $("empty").hidden = true;
   $("stage-view").hidden = false;
-  $("job-title").textContent = `新文件：${file.name}`;
-  $("job-note").textContent = `待创建${inputModeNames[inputMode] || inputMode}任务；运行按钮将使用这个新文件。`;
+  $("job-title").textContent = files.length > 1 ? `新批次：${files.length} 张电商原图` : `新文件：${file.name}`;
+  $("job-note").textContent = files.length > 1
+    ? "将共享当前创新 Prompt 和物理参数，逐张运行完整链路。"
+    : `待创建${inputModeNames[inputMode] || inputMode}任务；运行按钮将使用这个新文件。`;
   const status = $("status");
   status.textContent = "待运行";
   status.className = "status idle";
-  $("rerun").disabled = false;
+  $("rerun").disabled = files.length > 1;
+  $("run-stage").disabled = files.length > 1;
   $("download").classList.add("disabled");
   $("download").href = "#";
   $("logs").textContent = "";
@@ -310,12 +448,30 @@ async function createJobFromForm() {
   return job;
 }
 
+async function createBatchFromForm() {
+  const files = selectedFiles();
+  if (inputMode !== "source" || files.length < 2) throw new Error("批量任务需要至少两张电商原图");
+  const form = new FormData();
+  files.forEach((file) => form.append("files", file));
+  form.append("settings_json", JSON.stringify(collectSettings()));
+  form.append("generation_prompt", $("generation-prompt").value);
+  form.append("render_pdf", $("render-pdf").checked ? "true" : "false");
+  const batch = await api("/api/batches", { method: "POST", body: form });
+  renderBatch(batch);
+  return batch;
+}
+
 async function createAndRun(event) {
   event.preventDefault();
   try {
     $("create-run").disabled = true;
-    await createJobFromForm();
-    await startRun("all", null);
+    if (inputMode === "source" && selectedFiles().length > 1) {
+      await createBatchFromForm();
+      scheduleBatchPoll();
+    } else {
+      await createJobFromForm();
+      await startRun("all", null);
+    }
   } catch (error) {
     toast(error.message);
   } finally {
@@ -430,15 +586,71 @@ function schedulePoll() {
   }, 1000);
 }
 
+function scheduleBatchPoll() {
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(async () => {
+    if (!currentBatch) return;
+    try {
+      const batch = await api(`/api/batches/${currentBatch.id}`);
+      renderBatch(batch);
+      if (["queued", "running"].includes(batch.status) || ["queued", "rendering"].includes(batch.delivery?.pdfStatus)) scheduleBatchPoll();
+      else if (batch.status === "complete") toast("批量任务全部完成");
+      else toast(batch.error || `批量任务${batchStatusLabel(batch.status)}`);
+    } catch (error) { toast(error.message); }
+  }, 1200);
+}
+
+async function renderBatchPdfs() {
+  if (!currentBatch) return;
+  try {
+    $("render-batch-pdf").disabled = true;
+    const batch = await api(
+      `/api/batches/${currentBatch.id}/delivery/pdf`,
+      { method: "POST" },
+    );
+    renderBatch(batch);
+    scheduleBatchPoll();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    $("render-batch-pdf").disabled = false;
+  }
+}
+
+async function retryBatch() {
+  if (!currentBatch) return;
+  try {
+    $("retry-batch").disabled = true;
+    renderBatch(await api(`/api/batches/${currentBatch.id}/retry`, { method: "POST" }));
+    scheduleBatchPoll();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    $("retry-batch").disabled = false;
+  }
+}
+
 async function showHistory() {
   try {
-    const jobs = await api("/api/jobs");
-    $("history-list").innerHTML = jobs.length ? jobs.map((job) => `
-      <div class="history-item" data-job-id="${job.id}"><div><strong>${job.id}</strong><br><small>${job.input_mode} · ${job.current_stage}</small></div><small>${job.status}<br>${job.updated_at || ""}</small></div>`).join("") : "暂无任务";
+    const [batches, jobs] = await Promise.all([api("/api/batches"), api("/api/jobs")]);
+    const batchHtml = batches.map((batch) => `
+      <div class="history-item" data-batch-id="${batch.id}"><div><strong>${batch.id}</strong><br><small>批量 · ${batch.completed}/${batch.total} 张完成</small></div><small>${batchStatusLabel(batch.status)}<br>${batch.updated_at || ""}</small></div>`).join("");
+    const jobHtml = jobs.map((job) => `
+      <div class="history-item" data-job-id="${job.id}"><div><strong>${job.id}</strong><br><small>${job.input_mode} · ${job.current_stage}</small></div><small>${job.status}<br>${job.updated_at || ""}</small></div>`).join("");
+    $("history-list").innerHTML = batchHtml || jobHtml
+      ? `${batchHtml}${jobHtml}`
+      : "暂无任务";
+    $("history-list").querySelectorAll("[data-batch-id]").forEach((item) => item.addEventListener("click", async () => {
+      pendingUpload = false;
+      $("file").value = "";
+      renderUploadList();
+      renderBatch(await api(`/api/batches/${item.dataset.batchId}`));
+      $("history-dialog").close();
+    }));
     $("history-list").querySelectorAll("[data-job-id]").forEach((item) => item.addEventListener("click", async () => {
       pendingUpload = false;
       $("file").value = "";
-      $("file-name").textContent = "PNG / JPG / WEBP · 最大 20MB";
+      renderUploadList();
       renderJob(await api(`/api/jobs/${item.dataset.jobId}`));
       $("history-dialog").close();
     }));
@@ -453,13 +665,18 @@ async function init() {
     $("generation-prompt").value = defaults.generation_prompt;
     const providers = [
       defaults.generation_configured ? "gpt-image-2 已配置" : "gpt-image-2 未配置",
+      defaults.comfyui_configured ? "ComfyUI 工作流已配置" : "ComfyUI 工作流未配置",
       defaults.semantic_grouping_configured ? "语义分组已配置" : "语义分组未配置",
     ];
     $("provider-status").textContent = providers.join(" · ");
   } catch (error) { toast(error.message); }
-  const previous = localStorage.getItem("windowStickerJobId");
-  if (previous) {
-    try { renderJob(await api(`/api/jobs/${previous}`)); } catch (_) {}
+  const previousBatch = localStorage.getItem("windowStickerBatchId");
+  const previousJob = localStorage.getItem("windowStickerJobId");
+  if (previousBatch) {
+    try { renderBatch(await api(`/api/batches/${previousBatch}`)); return; } catch (_) {}
+  }
+  if (previousJob) {
+    try { renderJob(await api(`/api/jobs/${previousJob}`)); } catch (_) {}
   }
 }
 
@@ -467,18 +684,23 @@ document.querySelectorAll("#input-mode button").forEach((button) => button.addEv
 document.querySelectorAll("#stepper button").forEach((button) => button.addEventListener("click", () => setActiveStage(button.dataset.stage)));
 document.querySelectorAll("[data-group-action]").forEach((button) => button.addEventListener("click", () => groupAction(button.dataset.groupAction)));
 $("file").addEventListener("change", () => {
-  $("file-name").textContent = $("file").files[0]?.name || "PNG / JPG / WEBP · 最大 20MB";
+  renderUploadList();
   if ($("file").files[0]) markPendingUpload();
 });
 $("job-form").addEventListener("submit", createAndRun);
 $("compactness-weight").addEventListener("input", updateWeightOutputs);
 $("alignment-weight").addEventListener("input", updateWeightOutputs);
 $("balance-weight").addEventListener("input", updateWeightOutputs);
+$("size-preset").addEventListener("change", applySizePreset);
+$("install-width").addEventListener("input", syncSizePreset);
+$("install-height").addEventListener("input", syncSizePreset);
 $("rerun").addEventListener("click", rerun);
 $("run-stage").addEventListener("click", runCurrentStage);
 $("group-canvas").addEventListener("click", canvasClick);
 $("save-group-options").addEventListener("click", saveGroupOptions);
 $("load-jobs").addEventListener("click", showHistory);
+$("retry-batch").addEventListener("click", retryBatch);
+$("render-batch-pdf").addEventListener("click", renderBatchPdfs);
 $("close-history").addEventListener("click", () => $("history-dialog").close());
 $("toggle-log").addEventListener("click", () => {
   const logs = $("logs");

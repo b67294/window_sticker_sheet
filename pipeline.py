@@ -26,8 +26,9 @@ STAGES = ["input", "generate", "key", "components", "geometry", "layout"]
 
 def default_settings() -> dict[str, Any]:
     return {
-        "install_width_mm": 800.0,
-        "install_height_mm": 1200.0,
+        "install_width_mm": 600.0,
+        "install_height_mm": 900.0,
+        "content_occupancy_ratio": 0.85,
         "sheet_width_mm": 381.0,
         "sheet_height_mm": 304.8,
         "sheet_margin_mm": 10.0,
@@ -69,6 +70,10 @@ def merge_settings(settings: dict[str, Any] | None) -> dict[str, Any]:
     merged["candidate_count"] = 4
     merged["auto_shrink_enabled"] = bool(merged.get("auto_shrink_enabled", True))
     merged["max_shrink_ratio"] = min(0.15, max(0.0, float(merged.get("max_shrink_ratio", 0.08))))
+    merged["content_occupancy_ratio"] = min(
+        1.0,
+        max(0.5, float(merged.get("content_occupancy_ratio", 0.85))),
+    )
     merged["layout_mode"] = "tidy_compact"
     return merged
 
@@ -77,6 +82,40 @@ def mm_per_pixel(width: int, height: int, settings: dict[str, Any]) -> float:
     return min(
         float(settings["install_width_mm"]) / max(width, 1),
         float(settings["install_height_mm"]) / max(height, 1),
+    )
+
+
+def content_bounds_px(
+    primitives: list[dict[str, Any]],
+    fallback_width: int,
+    fallback_height: int,
+) -> list[float]:
+    boxes = [item.get("bbox") for item in primitives if item.get("bbox")]
+    if not boxes:
+        return [0.0, 0.0, float(fallback_width), float(fallback_height)]
+    min_x = min(float(item[0]) for item in boxes)
+    min_y = min(float(item[1]) for item in boxes)
+    max_x = max(float(item[0]) + float(item[2]) for item in boxes)
+    max_y = max(float(item[1]) + float(item[3]) for item in boxes)
+    return [min_x, min_y, max(1.0, max_x - min_x), max(1.0, max_y - min_y)]
+
+
+def content_mm_per_pixel(
+    primitives: list[dict[str, Any]],
+    settings: dict[str, Any],
+    fallback_width: int,
+    fallback_height: int,
+) -> float:
+    """Fit the detected artwork, not arbitrary source whitespace, into the display envelope."""
+    _, _, content_width, content_height = content_bounds_px(
+        primitives,
+        fallback_width,
+        fallback_height,
+    )
+    occupancy = float(settings.get("content_occupancy_ratio", 0.85))
+    return min(
+        float(settings["install_width_mm"]) * occupancy / content_width,
+        float(settings["install_height_mm"]) * occupancy / content_height,
     )
 
 
@@ -333,7 +372,6 @@ def run_components(job: dict[str, Any], job_dir: Path, settings: dict[str, Any])
     overlay = cv2.cvtColor(foreground[:, :, :3], cv2.COLOR_RGB2BGR)
     tint = np.zeros_like(overlay)
     rng = random.Random(20260721)
-    mm_px = mm_per_pixel(foreground.shape[1], foreground.shape[0], settings)
     min_area = max(1, int(settings["min_component_area"]))
 
     for label_index in range(1, count):
@@ -366,7 +404,7 @@ def run_components(job: dict[str, Any], job_dir: Path, settings: dict[str, Any])
             {
                 "id": primitive_id,
                 "area_px": area,
-                "area_mm2": round(area * mm_px * mm_px, 4),
+                "area_mm2": 0.0,
                 "centroid": [round(float(centroids[label_index][0]), 3), round(float(centroids[label_index][1]), 3)],
                 "bbox": [x, y, width, height],
                 "rotated_bbox": {
@@ -378,6 +416,18 @@ def run_components(job: dict[str, Any], job_dir: Path, settings: dict[str, Any])
                 "asset_path": _relative(asset_file, job_dir),
                 "mask_path": _relative(mask_file, job_dir),
             }
+        )
+
+    mm_px = content_mm_per_pixel(
+        primitives,
+        settings,
+        foreground.shape[1],
+        foreground.shape[0],
+    )
+    for primitive in primitives:
+        primitive["area_mm2"] = round(
+            float(primitive["area_px"]) * mm_px * mm_px,
+            4,
         )
 
     overlay = cv2.addWeighted(overlay, 0.72, tint, 0.28, 0)
@@ -466,8 +516,13 @@ def run_geometry(job: dict[str, Any], job_dir: Path, settings: dict[str, Any]) -
     assets_dir.mkdir(parents=True, exist_ok=True)
     foreground = np.array(Image.open(job_dir / "key" / "foreground.png").convert("RGBA"))
     master_height, master_width = foreground.shape[:2]
-    mm_px = mm_per_pixel(master_width, master_height, settings)
     primitives = {item["id"]: item for item in job.get("primitives", [])}
+    mm_px = content_mm_per_pixel(
+        list(primitives.values()),
+        settings,
+        master_width,
+        master_height,
+    )
     overlay = cv2.cvtColor(foreground[:, :, :3], cv2.COLOR_RGB2BGR)
     geometries: list[dict[str, Any]] = []
 
@@ -560,9 +615,31 @@ def run_geometry(job: dict[str, Any], job_dir: Path, settings: dict[str, Any]) -
     _write_cv(overlay_path, overlay)
     geometry_path = stage_dir / "geometry.json"
     geometry_path.write_text(json.dumps(geometries, ensure_ascii=False, indent=2), encoding="utf-8")
+    content_bounds = content_bounds_px(
+        list(primitives.values()),
+        master_width,
+        master_height,
+    )
+    scale_metadata = {
+        "recommended_display_width_mm": float(settings["install_width_mm"]),
+        "recommended_display_height_mm": float(settings["install_height_mm"]),
+        "content_occupancy_ratio": float(settings["content_occupancy_ratio"]),
+        "detected_content_bbox_px": [round(value, 4) for value in content_bounds],
+        "millimeters_per_pixel": round(mm_px, 8),
+        "component_sizes_mm": {
+            item["group_id"]: [round(value, 4) for value in item["asset_size_mm"]]
+            for item in geometries
+        },
+    }
+    scale_path = stage_dir / "physical-scale.json"
+    scale_path.write_text(
+        json.dumps(scale_metadata, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     artifacts = [
         artifact("geometry", "geometry-overlay", "分组、轮廓与外接框", overlay_path, job_dir),
         artifact("geometry", "geometry-json", "排样几何数据", geometry_path, job_dir, "json"),
+        artifact("geometry", "physical-scale", "推荐铺贴范围与真实贴纸尺寸", scale_path, job_dir, "json"),
     ]
     return artifacts, geometries
 
@@ -1148,6 +1225,26 @@ def _candidate_rank(result: dict[str, Any]) -> tuple[int, float, float, float]:
     )
 
 
+def select_candidate(
+    candidates: list[dict[str, Any]],
+    *,
+    highest_score: bool = False,
+) -> dict[str, Any]:
+    if not candidates:
+        raise ValueError("没有可选择的候选方案")
+    if highest_score:
+        return max(
+            candidates,
+            key=lambda item: (
+                float(item.get("score", 0.0)),
+                -int(item.get("page_count", 0)),
+                float(item.get("layout_scale", 0.0)),
+                -float(item.get("largest_void_ratio", 1.0)),
+            ),
+        )
+    return min(candidates, key=_candidate_rank)
+
+
 def _quick_shelf_rank(
     items: list[dict[str, Any]], settings: dict[str, Any], seed: int, order_variant: int
 ) -> tuple[int, float, int]:
@@ -1274,8 +1371,9 @@ def render_candidate(
     for page_index in range(candidate["page_count"]):
         sheet = Image.new("RGBA", (width_px, height_px), (255, 255, 255, 0 if final else 255))
         draw = ImageDraw.Draw(sheet)
-        margin_px = round(float(candidate["settings"]["sheet_margin_mm"]) * scale)
-        draw.rectangle((margin_px, margin_px, width_px - margin_px, height_px - margin_px), outline=(45, 94, 110, 150), width=max(1, round(scale * 0.3)))
+        if not final:
+            margin_px = round(float(candidate["settings"]["sheet_margin_mm"]) * scale)
+            draw.rectangle((margin_px, margin_px, width_px - margin_px, height_px - margin_px), outline=(45, 94, 110, 150), width=max(1, round(scale * 0.3)))
         for placement in [item for item in candidate["placements"] if item["page"] == page_index]:
             source = by_id[placement["group_id"]]
             cache_key = (source["group_id"], dpi, float(candidate.get("layout_scale", 1.0)))
@@ -1377,8 +1475,17 @@ def run_layout(job: dict[str, Any], job_dir: Path, settings: dict[str, Any]) -> 
         artifacts.append(artifact("layout", f"{candidate_id}-json", f"候选 {index} 布局数据", layout_path, job_dir, "json"))
         candidates.append(candidate)
 
-    selected = min(candidates, key=_candidate_rank)
-    final_outputs = render_selected_outputs(selected, geometries, job_dir, settings)
+    selected = select_candidate(
+        candidates,
+        highest_score=job.get("input_mode") == "source",
+    )
+    final_outputs = render_selected_outputs(
+        selected,
+        geometries,
+        job_dir,
+        settings,
+        render_pdf=bool(job.get("render_pdf", True)),
+    )
     summary_path = stage_dir / "candidates.json"
     summary_path.write_text(json.dumps(candidates, ensure_ascii=False, indent=2), encoding="utf-8")
     artifacts.append(artifact("layout", "candidates-json", "四候选评分数据", summary_path, job_dir, "json"))
@@ -1448,7 +1555,14 @@ def selected_output_artifacts(outputs: dict[str, Any], job_dir: Path, prefix: st
     return items
 
 
-def render_selected_outputs(candidate: dict[str, Any], geometries: list[dict[str, Any]], job_dir: Path, settings: dict[str, Any]) -> dict[str, Any]:
+def render_selected_outputs(
+    candidate: dict[str, Any],
+    geometries: list[dict[str, Any]],
+    job_dir: Path,
+    settings: dict[str, Any],
+    *,
+    render_pdf: bool = True,
+) -> dict[str, Any]:
     final_dir = job_dir / "final"
     transparent_dir = final_dir / "transparent"
     white_dir = final_dir / "white"
@@ -1473,8 +1587,20 @@ def render_selected_outputs(candidate: dict[str, Any], geometries: list[dict[str
         white.save(white_path, quality=95, dpi=(int(settings["output_dpi"]), int(settings["output_dpi"])))
         white_paths.append(white_path)
         rgba.save(path, dpi=(int(settings["output_dpi"]), int(settings["output_dpi"])))
-    combined_pdf, page_pdfs = _render_print_pdfs(white_paths, final_dir, settings)
+    combined_pdf: Path | None = None
+    page_pdfs: list[Path] = []
+    pdf_error: str | None = None
+    if render_pdf:
+        try:
+            combined_pdf, page_pdfs = _render_print_pdfs(
+                white_paths,
+                final_dir,
+                settings,
+            )
+        except Exception as exc:
+            pdf_error = str(exc)
     manifest = {
+        "delivery_render_version": 2,
         "selected_candidate": candidate["id"],
         "page_count": candidate["page_count"],
         "layout_scale": candidate.get("layout_scale", 1.0),
@@ -1487,9 +1613,15 @@ def render_selected_outputs(candidate: dict[str, Any], geometries: list[dict[str
         "files": {
             "transparent_png": [_relative(path, job_dir) for path in transparent_paths],
             "white_jpg": [_relative(path, job_dir) for path in white_paths],
-            "multipage_pdf": _relative(combined_pdf, job_dir),
+            "multipage_pdf": (
+                _relative(combined_pdf, job_dir)
+                if combined_pdf
+                else None
+            ),
             "page_pdfs": [_relative(path, job_dir) for path in page_pdfs],
         },
+        "pdf_requested": render_pdf,
+        "pdf_error": pdf_error,
     }
     (final_dir / "layout.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
@@ -1497,4 +1629,45 @@ def render_selected_outputs(candidate: dict[str, Any], geometries: list[dict[str
         "white_paths": white_paths,
         "combined_pdf": combined_pdf,
         "page_pdfs": page_pdfs,
+        "pdf_error": pdf_error,
+    }
+
+
+def render_existing_pdfs(
+    job_dir: Path,
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Render PDFs from already-produced white Sheet pages without rerunning layout."""
+    final_dir = job_dir / "final"
+    white_paths = sorted((final_dir / "white").glob("sheet-*.jpg"))
+    combined_pdf, page_pdfs = _render_print_pdfs(
+        white_paths,
+        final_dir,
+        settings,
+    )
+    manifest_path = final_dir / "layout.json"
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    else:
+        manifest = {}
+    manifest.setdefault("files", {})
+    manifest["files"]["multipage_pdf"] = _relative(combined_pdf, job_dir)
+    manifest["files"]["page_pdfs"] = [
+        _relative(path, job_dir)
+        for path in page_pdfs
+    ]
+    manifest["pdf_requested"] = True
+    manifest["pdf_error"] = None
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return {
+        "transparent_paths": sorted(
+            (final_dir / "transparent").glob("sheet-*.png")
+        ),
+        "white_paths": white_paths,
+        "combined_pdf": combined_pdf,
+        "page_pdfs": page_pdfs,
+        "pdf_error": None,
     }

@@ -1,6 +1,8 @@
+import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 from PIL import Image, ImageDraw
 from shapely.geometry import box, mapping, shape
 
@@ -9,13 +11,24 @@ import pipeline
 
 def test_default_installation_size_is_portrait_window():
     defaults = pipeline.default_settings()
-    assert defaults["install_width_mm"] == 800.0
-    assert defaults["install_height_mm"] == 1200.0
+    assert defaults["install_width_mm"] == 600.0
+    assert defaults["install_height_mm"] == 900.0
+    assert defaults["content_occupancy_ratio"] == 0.85
     assert defaults["sheet_margin_mm"] == 10.0
     assert defaults["compactness_weight"] == 0.65
     assert defaults["alignment_weight"] == 0.25
     assert defaults["balance_weight"] == 0.10
     assert defaults["max_shrink_ratio"] == 0.08
+
+
+def test_content_scale_ignores_arbitrary_outer_whitespace():
+    config = pipeline.default_settings()
+    left = [{"bbox": [20, 30, 100, 200]}]
+    right = [{"bbox": [420, 530, 100, 200]}]
+    compact_canvas = pipeline.content_mm_per_pixel(left, config, 200, 300)
+    padded_canvas = pipeline.content_mm_per_pixel(right, config, 1000, 1200)
+    assert compact_canvas == padded_canvas
+    assert compact_canvas == min(600 * 0.85 / 100, 900 * 0.85 / 200)
 
 
 def test_explicit_legacy_margin_is_preserved():
@@ -51,6 +64,26 @@ def test_candidate_rank_prefers_pages_then_larger_scale():
     assert min([larger_scale, fewer_pages], key=pipeline._candidate_rank) is fewer_pages
     same_pages_small = {**base, "page_count": 3, "layout_scale": 0.92, "score": 0.95}
     assert min([larger_scale, same_pages_small], key=pipeline._candidate_rank) is larger_scale
+
+
+def test_source_selection_uses_highest_score_only():
+    production_favorite = {
+        "id": "fewer-pages",
+        "score": 0.72,
+        "page_count": 1,
+        "layout_scale": 1.0,
+        "largest_void_ratio": 0.08,
+    }
+    score_favorite = {
+        "id": "highest-score",
+        "score": 0.94,
+        "page_count": 2,
+        "layout_scale": 0.92,
+        "largest_void_ratio": 0.18,
+    }
+    candidates = [production_favorite, score_favorite]
+    assert pipeline.select_candidate(candidates)["id"] == "fewer-pages"
+    assert pipeline.select_candidate(candidates, highest_score=True)["id"] == "highest-score"
 
 
 def make_master(path: Path):
@@ -101,8 +134,14 @@ def test_full_algorithm_pipeline(tmp_path):
     job["primitives"] = primitives
     job["groups"] = groups
 
-    _, geometry = pipeline.run_geometry(job, tmp_path, config)
+    geometry_artifacts, geometry = pipeline.run_geometry(job, tmp_path, config)
     assert len(geometry) == 3
+    assert any(item["name"] == "physical-scale" for item in geometry_artifacts)
+    physical_scale = json.loads(
+        (tmp_path / "geometry" / "physical-scale.json").read_text(encoding="utf-8")
+    )
+    assert physical_scale["recommended_display_width_mm"] == config["install_width_mm"]
+    assert physical_scale["content_occupancy_ratio"] == config["content_occupancy_ratio"]
     for item in geometry:
         visible = shape(item["visible"])
         cutline = shape(item["cutline"])
@@ -112,6 +151,11 @@ def test_full_algorithm_pipeline(tmp_path):
     _, candidates, selected = pipeline.run_layout(job, tmp_path, config)
     assert len(candidates) == 4
     assert selected in {item["id"] for item in candidates}
+    final_png = Image.open(tmp_path / "final" / "transparent" / "sheet-01.png")
+    assert final_png.mode == "RGBA"
+    assert final_png.info["dpi"][0] == pytest.approx(config["output_dpi"], abs=0.2)
+    margin_px = round(config["sheet_margin_mm"] * config["output_dpi"] / 25.4)
+    assert final_png.getpixel((margin_px, margin_px))[3] == 0
     assert {item["strategy"] for item in candidates} == {
         "tidy_rows",
         "maxrects",
