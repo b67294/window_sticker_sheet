@@ -6,6 +6,7 @@ import json
 import os
 import re
 import uuid
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,7 @@ DEFAULT_PROMPT = """参考输入的电商原图，为其中的窗贴设计创作
 如果原图已有场景构图，保留其场景功能和区域关系并重新创作具体内容；如果原图只有零散素材，也要根据其原主题和主体关系组织成自然、协调的安装场景，但不得添加改变主题的新故事。
 
 【双竖窗构图硬约束】
-最终白底母版必须对应一扇宽 450 mm、高 600 mm 的双联窗，整体画布固定采用宽高比 450:600，即 3:4 竖版；不得跟随方形或横向输入图的画布比例，也不得输出 1:1 方形画布。无论输入图整体画布接近方形、横向或竖向，都要把最终安装设计明确组织成左右并列的两条竖向窗格场景。整体白底母版中必须清楚看出“左侧竖窗内容区 + 中间纯白分隔带 + 右侧竖窗内容区”，不能只生成一个居中的方形主体，也不能生成没有左右归属的满版素材。
+最终白底母版必须对应本次任务指定的“目标窗户／整套窗贴推荐展开尺寸”，整体画布必须采用本次任务尺寸约束中的宽高比；不得跟随方形或横向输入图的画布比例，也不得输出 1:1 方形画布。无论输入图整体画布接近方形、横向或竖向，都要把最终安装设计明确组织成左右并列的两条竖向窗格场景。整体白底母版中必须清楚看出“左侧竖窗内容区 + 中间纯白分隔带 + 右侧竖窗内容区”，不能只生成一个居中的方形主体，也不能生成没有左右归属的满版素材。
 左右两个内容区都应呈明显的窄长竖向比例，并分别从上到下形成完整构图；每侧都要有自己的主要视觉锚点、陪衬元素、上下节奏和留白。两侧主题完全一致、风格统一、视觉重量大致平衡，但具体主体、动作、装饰和组合不能简单复制或机械镜像，应形成互补、呼应的双联场景。
 中间分隔带保持连续、清楚的纯白留白，用来表达左右窗格边界并方便后续拆分；不要绘制真实窗框、门框、中柱、把手、玻璃、阴影或展示环境。所有主要模块必须明确归属于左侧或右侧竖窗，跨越中间分隔带的装饰禁止出现。
 优先采用适合竖窗的纵向场景语法，例如顶部引导、中部主体、底部视觉基座，或沿竖向延伸的边框、藤蔓、枝条、文字与装饰节奏；具体采用哪种形式必须由输入主题决定，不得套用固定节日或固定元素。
@@ -43,13 +44,36 @@ DEFAULT_PROMPT = """参考输入的电商原图，为其中的窗贴设计创作
 如果原图包含清晰可辨且承担主题表达的文字，只在能够逐字准确保留时使用；无法可靠识别时不要生成文字。不得新增品牌、Logo、水印、受保护IP角色或无关文字。
 
 【输出规范】
-整体画布必须是与 450 × 600 mm 安装范围一致的 3:4 竖版，推荐像素尺寸 1056 × 1408 px；禁止输出 1:1 方形画布，也不要输出过度窄长的 2:3 画布。画布内部必须严格呈现左右双竖窗的内容结构。背景必须是完全均匀的纯白色（#ffffff），不得有渐变、纹理、光照变化或阴影。图案边缘必须清晰，不得出现白色描边或白色光晕。
+整体画布必须与本次任务唯一尺寸约束中的物理宽高比一致；禁止输出 1:1 方形画布。画布内部必须严格呈现左右双竖窗的内容结构。背景必须是完全均匀的纯白色（#ffffff），不得有渐变、纹理、光照变化或阴影。图案边缘必须清晰，不得出现白色描边或白色光晕。
 删除窗框、玻璃、墙面、户外背景、包装、商品场景、透视、反光和摄影阴影，但保留窗贴图案之间原本有价值的场景搭配关系。
 只输出一张正视二维平面的双竖窗窗贴场景模块母版，不要输出商品效果图、展示样机、规则图标网格或无关联素材清单。最终输出前再次检查：画布四周必须全部为连续可见的纯白安全边距，不能有任何贴纸模块的像素接触或穿出画布边缘；允许模块内部采用具有明确场景意图、自然收口的半身或局部角色造型。"""
 
 DEFAULT_DIRECT_URL = "https://gptapi.longpean.com/gptImage/generateImageDirect"
 DEFAULT_UPLOAD_URL = "https://stpic.longpean.com/picture/upLoadQiNiu"
 DEFAULT_COMPAT_URL = "https://test-plugin.longpean.com/v1/chat/completions"
+SIZE_CONSTRAINT_MARKER = "【本次任务唯一尺寸约束】"
+
+
+def _format_mm(value: float) -> str:
+    return f"{value:g}"
+
+
+def render_generation_prompt(custom_prompt: str | None, settings: dict[str, Any]) -> str:
+    """Materialize the one authoritative physical-size constraint for a job."""
+    base = (custom_prompt or DEFAULT_PROMPT).strip()
+    if SIZE_CONSTRAINT_MARKER in base:
+        base = base.split(SIZE_CONSTRAINT_MARKER, 1)[0].rstrip()
+
+    width = max(1.0, float(settings.get("install_width_mm", 450.0)))
+    height = max(1.0, float(settings.get("install_height_mm", 600.0)))
+    occupancy = min(1.0, max(0.01, float(settings.get("content_occupancy_ratio", 0.85))))
+    ratio = Fraction(width / height).limit_denominator(100)
+    orientation = "竖版" if height > width else ("横版" if width > height else "方形")
+
+    constraint = f"""{SIZE_CONSTRAINT_MARKER}
+本任务只使用一套物理尺寸：目标小型窗户玻璃范围与整套窗贴推荐展开范围统一为 {_format_mm(width)} × {_format_mm(height)} mm（宽 × 高），宽高比约为 {ratio.numerator}:{ratio.denominator}，画布方向为{orientation}。这不是两套尺寸，窗贴设计完成后的整体推荐展开范围就近似等于这扇目标窗户的尺寸。
+有效图案主体与必要装饰合计应占该展开范围约 {occupancy * 100:g}%，其余作为自然留白和窗格分隔；不得把整套图案再次按另一套“贴纸尺寸”缩放。模型只需遵守比例、构图层级和相对占比，精确毫米尺寸由后续程序排版与输出阶段确定。"""
+    return f"{base}\n\n{constraint}"
 
 
 def _compat_endpoint() -> str:

@@ -44,7 +44,7 @@
 
         <section class="panel-block">
           <div class="section-title"><span>02</span>物理规格</div>
-          <label>推荐铺贴规格
+          <label>目标窗户／推荐展开尺寸
             <select id="size-preset">
               <option value="small" selected>小号 · 450×600 mm（默认）</option>
               <option value="standard">标准 · 600×800 mm</option>
@@ -53,14 +53,14 @@
             </select>
           </label>
           <div class="field-grid two">
-            <label>推荐铺贴宽度 mm<input id="install-width" data-setting="install_width_mm" type="number" min="10" step="1"></label>
-            <label>推荐铺贴高度 mm<input id="install-height" data-setting="install_height_mm" type="number" min="10" step="1"></label>
+            <label>目标宽度 mm<input id="install-width" data-setting="install_width_mm" type="number" min="10" step="1"></label>
+            <label>目标高度 mm<input id="install-height" data-setting="install_height_mm" type="number" min="10" step="1"></label>
             <label>Sheet 宽 mm<input data-setting="sheet_width_mm" type="number" min="20" step="0.1"></label>
             <label>Sheet 高 mm<input data-setting="sheet_height_mm" type="number" min="20" step="0.1"></label>
           </div>
-          <label class="occupancy-field">图案占推荐范围
+          <label class="occupancy-field">有效图案占展开范围
             <input data-setting="content_occupancy_ratio" data-setting-transform="percent" type="number" min="50" max="100" step="1">
-            <small>程序会忽略参考图白边，默认让有效图案占推荐铺贴范围的85%。</small>
+            <small>同一尺寸同时表示目标小型窗户玻璃范围和整套窗贴推荐展开范围；默认有效图案约占85%，其余用于自然留白和窗格分隔。</small>
           </label>
           <div class="field-grid three">
             <label title="纸张四周禁止放置贴纸的安全区域">纸张边缘安全区<input data-setting="sheet_margin_mm" type="number" min="0" step="0.1"></label>

@@ -40,7 +40,7 @@ _load_local_env(Path(__file__).resolve().with_name(".env"))
 
 import pipeline
 from comfyui_client import comfyui_configured, remove_background
-from generation import DEFAULT_PROMPT, generate_master, generation_configured
+from generation import DEFAULT_PROMPT, generate_master, generation_configured, render_generation_prompt
 from semantic_grouping import infer_and_apply_semantic_groups, semantic_grouping_configured
 
 
@@ -786,9 +786,10 @@ def health() -> dict[str, Any]:
 
 @app.get("/api/defaults")
 def defaults() -> dict[str, Any]:
+    settings = pipeline.default_settings()
     return {
-        "settings": pipeline.default_settings(),
-        "generation_prompt": DEFAULT_PROMPT,
+        "settings": settings,
+        "generation_prompt": render_generation_prompt(DEFAULT_PROMPT, settings),
         "generation_configured": generation_configured(),
         "comfyui_configured": comfyui_configured(),
         "semantic_grouping_configured": semantic_grouping_configured(),
@@ -849,7 +850,7 @@ async def create_batch(
         uploads.append((file_name, content))
 
     settings = _parse_settings(settings_json)
-    prompt = generation_prompt.strip() or DEFAULT_PROMPT
+    prompt = render_generation_prompt(generation_prompt, settings)
     batch_id = f"batch-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
     created = now_iso()
     items: list[dict[str, Any]] = []
@@ -1223,7 +1224,7 @@ def _create_job_record(
         ),
         "uploads": {input_mode: upload_name},
         "settings": settings,
-        "generation_prompt": generation_prompt.strip() or DEFAULT_PROMPT,
+        "generation_prompt": render_generation_prompt(generation_prompt, settings),
         "render_pdf": bool(render_pdf),
         "pdf_status": None,
         "pdf_error": None,

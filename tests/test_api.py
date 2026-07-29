@@ -203,7 +203,9 @@ def test_ecommerce_batch_creates_independent_serial_children(tmp_path, monkeypat
     assert (tmp_path / "_batches" / batch["id"] / "batch.json").is_file()
     child_jobs = [webapp._jobs[item["job_id"]] for item in batch["items"]]
     assert all(job["input_mode"] == "source" for job in child_jobs)
-    assert all(job["generation_prompt"] == prompt for job in child_jobs)
+    assert all(job["generation_prompt"].startswith(prompt) for job in child_jobs)
+    assert all("450 × 600 mm" in job["generation_prompt"] for job in child_jobs)
+    assert all(job["generation_prompt"].count("【本次任务唯一尺寸约束】") == 1 for job in child_jobs)
     assert all(job["render_pdf"] is True for job in child_jobs)
     assert len({webapp.job_dir(job["id"]) for job in child_jobs}) == 3
 

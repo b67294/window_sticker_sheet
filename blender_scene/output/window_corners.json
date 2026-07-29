@@ -1,0 +1,262 @@
+{
+  "schema_version": "1.0",
+  "units": {
+    "world": "meter",
+    "physical_dimensions": "millimeter",
+    "image": "pixel"
+  },
+  "room": {
+    "width_mm": 4000,
+    "depth_mm": 5000,
+    "height_mm": 2800
+  },
+  "window_target_surface": {
+    "interpretation": "exact usable glass/sticker plane; frame is outside this size",
+    "width_mm": 450,
+    "height_mm": 600,
+    "bottom_from_floor_mm": 850,
+    "center_world_m": [
+      0.0,
+      2.434,
+      1.15
+    ]
+  },
+  "render": {
+    "width_px": 2048,
+    "height_px": 1536,
+    "pixel_origin": "top-left"
+  },
+  "window_corner_order": [
+    "top_left",
+    "top_right",
+    "bottom_right",
+    "bottom_left"
+  ],
+  "cameras": {
+    "front": {
+      "horizontal_angle_deg": 0.0,
+      "focal_length_mm": 50.0,
+      "sensor_width_mm": 36.0,
+      "location_world_m": [
+        -0.0,
+        -2.26600003,
+        1.54999995
+      ],
+      "rotation_euler_radians": [
+        1.50705302,
+        -0.0,
+        0.0
+      ],
+      "clay_image": "front_clay.jpg",
+      "glass_mask": "front_glass_mask.png",
+      "window_corners": {
+        "top_left": {
+          "world_m": [
+            -0.225,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 887.619,
+            "y": 647.177,
+            "normalized_x": 0.43340769,
+            "normalized_y": 0.42133909,
+            "depth_camera_space_m": 4.69273329
+          }
+        },
+        "top_right": {
+          "world_m": [
+            0.225,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 1160.381,
+            "y": 647.177,
+            "normalized_x": 0.56659234,
+            "normalized_y": 0.42133909,
+            "depth_camera_space_m": 4.69273329
+          }
+        },
+        "bottom_right": {
+          "world_m": [
+            0.225,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 1159.279,
+            "y": 1008.165,
+            "normalized_x": 0.56605434,
+            "normalized_y": 0.65635744,
+            "depth_camera_space_m": 4.73095322
+          }
+        },
+        "bottom_left": {
+          "world_m": [
+            -0.225,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 888.721,
+            "y": 1008.165,
+            "normalized_x": 0.43394566,
+            "normalized_y": 0.65635744,
+            "depth_camera_space_m": 4.73095322
+          }
+        }
+      }
+    },
+    "left_10deg": {
+      "horizontal_angle_deg": 10.0,
+      "focal_length_mm": 50.0,
+      "sensor_width_mm": 36.0,
+      "location_world_m": [
+        -0.81614643,
+        -2.19459653,
+        1.54999995
+      ],
+      "rotation_euler_radians": [
+        1.50705302,
+        -1e-08,
+        -0.17453294
+      ],
+      "clay_image": "left_10deg_clay.jpg",
+      "glass_mask": "left_10deg_glass_mask.png",
+      "window_corners": {
+        "top_left": {
+          "world_m": [
+            -0.225,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 889.003,
+            "y": 647.685,
+            "normalized_x": 0.43408325,
+            "normalized_y": 0.42166984,
+            "depth_camera_space_m": 4.65380383
+          }
+        },
+        "top_right": {
+          "world_m": [
+            0.225,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 1157.629,
+            "y": 646.676,
+            "normalized_x": 0.56524831,
+            "normalized_y": 0.4210127,
+            "depth_camera_space_m": 4.73178673
+          }
+        },
+        "bottom_right": {
+          "world_m": [
+            0.225,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 1156.558,
+            "y": 1004.712,
+            "normalized_x": 0.56472552,
+            "normalized_y": 0.65410954,
+            "depth_camera_space_m": 4.77000713
+          }
+        },
+        "bottom_left": {
+          "world_m": [
+            -0.225,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 890.102,
+            "y": 1011.664,
+            "normalized_x": 0.43462017,
+            "normalized_y": 0.65863547,
+            "depth_camera_space_m": 4.69202375
+          }
+        }
+      }
+    },
+    "right_10deg": {
+      "horizontal_angle_deg": -10.0,
+      "focal_length_mm": 50.0,
+      "sensor_width_mm": 36.0,
+      "location_world_m": [
+        0.81614643,
+        -2.19459653,
+        1.54999995
+      ],
+      "rotation_euler_radians": [
+        1.50705302,
+        1e-08,
+        0.17453294
+      ],
+      "clay_image": "right_10deg_clay.jpg",
+      "glass_mask": "right_10deg_glass_mask.png",
+      "window_corners": {
+        "top_left": {
+          "world_m": [
+            -0.225,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 890.371,
+            "y": 646.676,
+            "normalized_x": 0.43475169,
+            "normalized_y": 0.4210127,
+            "depth_camera_space_m": 4.73178673
+          }
+        },
+        "top_right": {
+          "world_m": [
+            0.225,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 1158.998,
+            "y": 647.685,
+            "normalized_x": 0.56591678,
+            "normalized_y": 0.42166984,
+            "depth_camera_space_m": 4.65380383
+          }
+        },
+        "bottom_right": {
+          "world_m": [
+            0.225,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 1157.898,
+            "y": 1011.664,
+            "normalized_x": 0.5653798,
+            "normalized_y": 0.65863547,
+            "depth_camera_space_m": 4.69202375
+          }
+        },
+        "bottom_left": {
+          "world_m": [
+            -0.225,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 891.442,
+            "y": 1004.712,
+            "normalized_x": 0.43527448,
+            "normalized_y": 0.65410954,
+            "depth_camera_space_m": 4.77000713
+          }
+        }
+      }
+    }
+  }
+}

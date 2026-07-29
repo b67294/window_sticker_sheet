@@ -39,8 +39,7 @@ def test_default_prompt_preserves_theme_innovates_and_builds_scene_modules():
     assert "不要生成彼此无关" in prompt
     assert "模块内部的相关元素可以接触" in prompt
     assert "不同主要模块之间必须留出" in prompt
-    assert "450 × 600 mm" in prompt
-    assert "3:4 竖版" in prompt
+    assert "目标窗户／整套窗贴推荐展开尺寸" in prompt
     assert "禁止输出 1:1 方形画布" in prompt
     assert "元素完整性与边缘互动" in prompt
     assert "探头、半身、局部进入" in prompt
@@ -48,6 +47,38 @@ def test_default_prompt_preserves_theme_innovates_and_builds_scene_modules():
     assert "不得切断面部、文字或关键识别特征" in prompt
     assert "画布四周必须全部为连续可见的纯白安全边距" in prompt
     assert "#ffffff" in prompt
+
+
+def test_generation_prompt_materializes_one_authoritative_size_constraint():
+    prompt = generation.render_generation_prompt(
+        generation.DEFAULT_PROMPT,
+        {
+            "install_width_mm": 600,
+            "install_height_mm": 800,
+            "content_occupancy_ratio": 0.85,
+        },
+    )
+
+    assert "600 × 800 mm" in prompt
+    assert "宽高比约为 3:4" in prompt
+    assert "约 85%" in prompt
+    assert "450 × 600 mm" not in prompt
+    assert prompt.count(generation.SIZE_CONSTRAINT_MARKER) == 1
+
+
+def test_generation_prompt_replaces_stale_materialized_constraint():
+    first = generation.render_generation_prompt(
+        "自定义创新要求",
+        {"install_width_mm": 450, "install_height_mm": 600},
+    )
+    second = generation.render_generation_prompt(
+        first,
+        {"install_width_mm": 750, "install_height_mm": 1000},
+    )
+
+    assert "450 × 600 mm" not in second
+    assert "750 × 1000 mm" in second
+    assert second.count(generation.SIZE_CONSTRAINT_MARKER) == 1
 
 
 def test_auto_generation_size_uses_default_window_ratio(tmp_path, monkeypatch):
