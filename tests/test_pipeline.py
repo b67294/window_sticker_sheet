@@ -11,8 +11,8 @@ import pipeline
 
 def test_default_installation_size_is_portrait_window():
     defaults = pipeline.default_settings()
-    assert defaults["install_width_mm"] == 600.0
-    assert defaults["install_height_mm"] == 900.0
+    assert defaults["install_width_mm"] == 450.0
+    assert defaults["install_height_mm"] == 600.0
     assert defaults["content_occupancy_ratio"] == 0.85
     assert defaults["sheet_margin_mm"] == 10.0
     assert defaults["compactness_weight"] == 0.65
@@ -28,7 +28,7 @@ def test_content_scale_ignores_arbitrary_outer_whitespace():
     compact_canvas = pipeline.content_mm_per_pixel(left, config, 200, 300)
     padded_canvas = pipeline.content_mm_per_pixel(right, config, 1000, 1200)
     assert compact_canvas == padded_canvas
-    assert compact_canvas == min(600 * 0.85 / 100, 900 * 0.85 / 200)
+    assert compact_canvas == min(450 * 0.85 / 100, 600 * 0.85 / 200)
 
 
 def test_explicit_legacy_margin_is_preserved():

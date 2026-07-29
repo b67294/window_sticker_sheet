@@ -26,8 +26,8 @@ STAGES = ["input", "generate", "key", "components", "geometry", "layout"]
 
 def default_settings() -> dict[str, Any]:
     return {
-        "install_width_mm": 600.0,
-        "install_height_mm": 900.0,
+        "install_width_mm": 450.0,
+        "install_height_mm": 600.0,
         "content_occupancy_ratio": 0.85,
         "sheet_width_mm": 381.0,
         "sheet_height_mm": 304.8,

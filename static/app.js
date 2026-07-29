@@ -8,9 +8,9 @@ const inputModeNotes = {
 };
 const inputModeNames = { master: "白底母版", alpha: "透明 PNG", source: "电商原图" };
 const sizePresets = {
-  small: [600, 900],
-  standard: [800, 1200],
-  large: [1000, 1500],
+  small: [450, 600],
+  standard: [600, 800],
+  large: [750, 1000],
 };
 
 let defaults = null;

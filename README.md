@@ -27,6 +27,7 @@ C:\Users\melonedoe\miniconda3\python.exe -m pip install -r requirements.txt
 $env:LP_IMAGE_PROVIDER="chat_compat"
 $env:LP_COMPAT_BASE_URL="https://test-plugin.longpean.com/v1/chat/completions"
 $env:LP_COMPAT_TOKEN="your-client-key"
+$env:LP_IMAGE_SIZE="1056x1408" # 对应默认 450×600 mm 的 3:4 竖版母版
 ```
 
 视觉语义分组默认复用上述 key，模型可单独设置：
@@ -72,7 +73,7 @@ $env:LP_COMFYUI_TIMEOUT_SECONDS="600"
 ## 推荐铺贴规格与真实尺寸
 
 - 页面中的宽高表示整套窗贴建议铺开后的范围，不代表参考电商图里窗户的真实尺寸。
-- 默认使用小号 `600×900 mm`，也可整批选择标准 `800×1200 mm`、大号 `1000×1500 mm` 或自定义。
+- 默认使用小号 `450×600 mm`，也可整批选择标准 `600×800 mm`、大号 `750×1000 mm` 或自定义；三档均为 3:4。
 - 同一批次共享一个推荐铺贴规格。程序检测有效图案的整体外接范围，忽略来源图片不稳定的外围白边，再按默认 `85%` 内容占比计算各组件的真实毫米尺寸。
 - 每个任务在 `geometry/physical-scale.json` 保存推荐铺贴范围、有效内容范围、毫米/像素换算值和每个组件的真实尺寸，供后续窗户示意图按比例合成。
 

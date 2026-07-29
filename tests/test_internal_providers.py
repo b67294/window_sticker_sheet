@@ -31,12 +31,31 @@ def image_bytes(mode="RGB"):
     return output.getvalue()
 
 
-def test_default_prompt_is_strong_derivative_white_background_contract():
+def test_default_prompt_preserves_theme_innovates_and_builds_scene_modules():
     prompt = generation.DEFAULT_PROMPT
     assert "至少明显改变四项" in prompt
     assert "不要一比一复刻" in prompt
+    assert "主题表达不变" in prompt
+    assert "不要生成彼此无关" in prompt
+    assert "模块内部的相关元素可以接触" in prompt
+    assert "不同主要模块之间必须留出" in prompt
+    assert "450 × 600 mm" in prompt
+    assert "3:4 竖版" in prompt
+    assert "禁止输出 1:1 方形画布" in prompt
+    assert "元素完整性与边缘互动" in prompt
+    assert "探头、半身、局部进入" in prompt
+    assert "边缘互动贴纸模块" in prompt
+    assert "不得切断面部、文字或关键识别特征" in prompt
+    assert "画布四周必须全部为连续可见的纯白安全边距" in prompt
     assert "#ffffff" in prompt
-    assert "彼此不接触" in prompt
+
+
+def test_auto_generation_size_uses_default_window_ratio(tmp_path, monkeypatch):
+    source = tmp_path / "square.png"
+    source.write_bytes(image_bytes())
+    monkeypatch.setenv("LP_IMAGE_SIZE", "auto")
+
+    assert generation._choose_generation_size(source) == "1056x1408"
 
 
 def test_direct_image_provider_uploads_reference_and_saves_trace(tmp_path, monkeypatch):
