@@ -15,6 +15,7 @@
     <div class="top-actions">
       <span id="provider-status" class="provider">检查生图配置…</span>
       <button id="load-jobs" class="ghost">历史任务</button>
+      <button id="restart-service" class="ghost">重启服务</button>
     </div>
   </header>
 
@@ -37,21 +38,27 @@
           </label>
           <div id="upload-list" class="upload-list" hidden></div>
           <details id="prompt-details" hidden>
-            <summary>编辑生图 Prompt</summary>
+            <summary>编辑通用生图 Prompt</summary>
             <textarea id="generation-prompt" rows="8"></textarea>
+            <p class="mode-note">这里只编辑跨主题通用部分；窗户模板硬约束由系统只读追加。</p>
+            <details class="prompt-preview-details">
+              <summary>查看实际完整 Prompt</summary>
+              <pre id="generation-prompt-preview" class="prompt-preview"></pre>
+            </details>
           </details>
+          <div id="aspect-warning" class="inline-warning" hidden></div>
         </section>
 
         <section class="panel-block">
           <div class="section-title"><span>02</span>物理规格</div>
-          <label>目标窗户／推荐展开尺寸
-            <select id="size-preset">
-              <option value="small" selected>小号 · 450×600 mm（默认）</option>
-              <option value="standard">标准 · 600×800 mm</option>
-              <option value="large">大号 · 750×1000 mm</option>
-              <option value="custom">自定义</option>
+          <label>窗户模板
+            <select id="window-template" data-setting="window_template" data-setting-type="string">
+              <option value="double" selected>双栏窗 · 1:1（默认）</option>
+              <option value="single">单窗 · 3:4</option>
             </select>
           </label>
+          <div id="window-template-description" class="mode-note"></div>
+          <div id="window-template-constraint" class="template-constraint"></div>
           <div class="field-grid two">
             <label>目标宽度 mm<input id="install-width" data-setting="install_width_mm" type="number" min="10" step="1"></label>
             <label>目标高度 mm<input id="install-height" data-setting="install_height_mm" type="number" min="10" step="1"></label>

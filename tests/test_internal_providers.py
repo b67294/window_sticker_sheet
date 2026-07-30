@@ -33,19 +33,19 @@ def image_bytes(mode="RGB"):
 
 def test_default_prompt_preserves_theme_innovates_and_builds_scene_modules():
     prompt = generation.DEFAULT_PROMPT
-    assert "至少明显改变四项" in prompt
+    assert "至少四项明显变化" in prompt
     assert "不要一比一复刻" in prompt
     assert "主题表达不变" in prompt
     assert "不要生成彼此无关" in prompt
-    assert "模块内部的相关元素可以接触" in prompt
+    assert "主要模块内部可以合理接触" in prompt
     assert "不同主要模块之间必须留出" in prompt
-    assert "目标窗户／整套窗贴推荐展开尺寸" in prompt
-    assert "禁止输出 1:1 方形画布" in prompt
+    assert "具体画布比例与窗格结构" in prompt
+    assert "左右双竖窗" not in prompt
     assert "元素完整性与边缘互动" in prompt
     assert "探头、半身、局部进入" in prompt
-    assert "边缘互动贴纸模块" in prompt
-    assert "不得切断面部、文字或关键识别特征" in prompt
-    assert "画布四周必须全部为连续可见的纯白安全边距" in prompt
+    assert "独立贴纸模块" in prompt
+    assert "文字、面部、关键识别特征" in prompt
+    assert "画布四周必须保留连续可见的纯白安全边距" in prompt
     assert "#ffffff" in prompt
 
 
@@ -53,6 +53,7 @@ def test_generation_prompt_materializes_one_authoritative_size_constraint():
     prompt = generation.render_generation_prompt(
         generation.DEFAULT_PROMPT,
         {
+            "window_template": "single",
             "install_width_mm": 600,
             "install_height_mm": 800,
             "content_occupancy_ratio": 0.85,
@@ -69,11 +70,11 @@ def test_generation_prompt_materializes_one_authoritative_size_constraint():
 def test_generation_prompt_replaces_stale_materialized_constraint():
     first = generation.render_generation_prompt(
         "自定义创新要求",
-        {"install_width_mm": 450, "install_height_mm": 600},
+        {"window_template": "single", "install_width_mm": 450, "install_height_mm": 600},
     )
     second = generation.render_generation_prompt(
         first,
-        {"install_width_mm": 750, "install_height_mm": 1000},
+        {"window_template": "single", "install_width_mm": 750, "install_height_mm": 1000},
     )
 
     assert "450 × 600 mm" not in second
@@ -86,7 +87,33 @@ def test_auto_generation_size_uses_default_window_ratio(tmp_path, monkeypatch):
     source.write_bytes(image_bytes())
     monkeypatch.setenv("LP_IMAGE_SIZE", "auto")
 
-    assert generation._choose_generation_size(source) == "1056x1408"
+    assert generation._choose_generation_size(source) == "1216x1216"
+    assert generation._choose_generation_size(source, {"window_template": "single"}) == "1056x1408"
+
+
+def test_template_prompts_are_mutually_exclusive():
+    single = generation.render_generation_prompt(
+        "通用创新要求",
+        {"window_template": "single", "install_width_mm": 450, "install_height_mm": 600},
+    )
+    double = generation.render_generation_prompt(
+        "通用创新要求",
+        {"window_template": "double", "install_width_mm": 600, "install_height_mm": 600},
+    )
+    assert "单窗" in single
+    assert "禁止生成贯穿全高的中央纯白分隔带" in single
+    assert "左右两个竖向内容区" not in single
+    assert "双栏窗" in double
+    assert "约占画布总宽度6%" in double
+    assert "不得跨越或侵入该分隔带" in double
+
+
+def test_explicit_generation_size_must_match_template(tmp_path, monkeypatch):
+    source = tmp_path / "source.png"
+    source.write_bytes(image_bytes())
+    monkeypatch.setenv("LP_IMAGE_SIZE", "1056x1408")
+    with __import__("pytest").raises(ValueError, match="与窗户模板 double"):
+        generation._choose_generation_size(source, {"window_template": "double"})
 
 
 def test_direct_image_provider_uploads_reference_and_saves_trace(tmp_path, monkeypatch):
@@ -160,10 +187,71 @@ def test_semantic_provider_parses_fenced_json_and_merges_groups(tmp_path, monkey
     assert semantic["max_copies"] == 0
     assert metadata["applied_count"] == 1
     assert metadata["response_id"] == "chatcmpl-1"
+    assert metadata["fallback_used"] is False
     request_text = (tmp_path / "components" / "semantic" / "request-summary.json").read_text(encoding="utf-8")
     assert "secret-client-key" not in request_text
     assert "<data-url:" in request_text
     assert any(item["name"] == "semantic-relations" for item in artifacts)
+
+
+def test_semantic_provider_uses_ordered_chain_before_gpt4o(tmp_path, monkeypatch):
+    (tmp_path / "key").mkdir()
+    (tmp_path / "components").mkdir()
+    (tmp_path / "key" / "foreground.png").write_bytes(image_bytes("RGBA"))
+    (tmp_path / "components" / "components-overlay.png").write_bytes(image_bytes())
+    primitives = [
+        {"id": "p001", "bbox": [10, 10, 20, 20]},
+        {"id": "p002", "bbox": [40, 10, 20, 20]},
+    ]
+    groups = [
+        {"id": "g001", "primitive_ids": ["p001"], "bbox": [10, 10, 20, 20], "active": True},
+        {"id": "g002", "primitive_ids": ["p002"], "bbox": [40, 10, 20, 20], "active": True},
+    ]
+    monkeypatch.setenv("LP_VISION_BASE_URL", "https://vision.example/v1/chat/completions")
+    monkeypatch.setenv("LP_VISION_TOKEN", "secret-client-key")
+    monkeypatch.setenv(
+        "LP_VISION_MODELS",
+        "codex-gpt-5.6-sol,codex-gpt-5.6-luna,codex-gpt-5.6-terra,gpt-4o",
+    )
+    called_models = []
+
+    def fake_post(*args, **kwargs):
+        model = kwargs["json"]["model"]
+        called_models.append(model)
+        if model.startswith("codex-"):
+            return FakeResponse(
+                {"error": {"code": "upstream_error", "message": "codex container pool failed"}},
+                status_code=502,
+            )
+        return FakeResponse({
+            "id": "chatcmpl-fallback",
+            "choices": [{"message": {"content": json.dumps({
+                "semantic_groups": [{
+                    "members": ["p001", "p002"],
+                    "mode": "rigid",
+                    "confidence": 0.98,
+                    "reason": "同一语义组合",
+                }]
+            }, ensure_ascii=False)}}],
+        })
+
+    monkeypatch.setattr(semantic_grouping.requests, "post", fake_post)
+    artifacts, updated, metadata = semantic_grouping.infer_and_apply_semantic_groups(
+        tmp_path, primitives, groups, {"semantic_min_confidence": 0.9}
+    )
+    assert called_models == [
+        "codex-gpt-5.6-sol",
+        "codex-gpt-5.6-luna",
+        "codex-gpt-5.6-terra",
+        "gpt-4o",
+    ]
+    assert metadata["model"] == "gpt-4o"
+    assert metadata["fallback_used"] is True
+    assert metadata["attempts"][0]["http_status"] == 502
+    assert metadata["attempts"][3]["status"] == "success"
+    assert metadata["model_chain"] == called_models
+    assert any(group.get("origin") == "semantic" and group.get("active") for group in updated)
+    assert any(item["name"] == "semantic-attempts" for item in artifacts)
 
 
 def test_low_confidence_semantic_relation_is_not_applied():

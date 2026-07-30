@@ -13,8 +13,13 @@ from typing import Any
 import requests
 from PIL import Image
 
+from window_templates import (
+    TEMPLATE_CONSTRAINT_VERSION,
+    expected_aspect_ratio,
+    get_window_template,
+)
 
-DEFAULT_PROMPT = """参考输入的电商原图，为其中的窗贴设计创作同系列但差异明显的全新款式，并输出为干净的正视平面白底母版。本提示适用于任意节日、季节、人物、动物、植物、文字或装饰主题，不要擅自套用固定主题。
+LEGACY_DOUBLE_PROMPT = """参考输入的电商原图，为其中的窗贴设计创作同系列但差异明显的全新款式，并输出为干净的正视平面白底母版。本提示适用于任意节日、季节、人物、动物、植物、文字或装饰主题，不要擅自套用固定主题。
 
 【最高优先级：主题表达不变】
 先理解原设计正在表达的节庆或内容主题、情绪氛围、目标人群、核心主体、关键象征、故事关系和使用场景。创新前后必须表达同一个主题和用途，不得把原主题替换成其他节日、季节、故事或人群，不得删除决定主题识别的核心信息。保留窗贴产品类型、主角类别、核心识别点和整体画风方向。
@@ -48,9 +53,31 @@ DEFAULT_PROMPT = """参考输入的电商原图，为其中的窗贴设计创作
 删除窗框、玻璃、墙面、户外背景、包装、商品场景、透视、反光和摄影阴影，但保留窗贴图案之间原本有价值的场景搭配关系。
 只输出一张正视二维平面的双竖窗窗贴场景模块母版，不要输出商品效果图、展示样机、规则图标网格或无关联素材清单。最终输出前再次检查：画布四周必须全部为连续可见的纯白安全边距，不能有任何贴纸模块的像素接触或穿出画布边缘；允许模块内部采用具有明确场景意图、自然收口的半身或局部角色造型。"""
 
+DEFAULT_PROMPT = """参考输入的电商原图，为其中的窗贴设计创作同系列但差异明显的全新款式，并输出为干净的正视平面白底母版。本提示适用于任意节日、季节、人物、动物、植物、文字或装饰主题，不要擅自套用固定主题。
+
+【最高优先级：主题表达不变】
+先理解原设计正在表达的主题、情绪氛围、目标人群、核心主体、关键象征、故事关系和使用场景。创新前后必须表达同一个主题和用途，不得替换成其他节日、季节、故事或人群，不得删除决定主题识别的核心信息。
+
+【创新与场景化】
+不要一比一复刻，也不要只做换色、镜像、缩放或简单重排。在不改变主题表达的前提下，重新设计主体造型、动作姿态、道具组合、辅助元素、次级配色、装饰细节、组合方式和画面叙事，其中至少四项明显变化。
+不要生成彼此无关、尺寸相近、规则排列的图标集合。分析原图的安装构图、视觉锚点、大小层级、方向关系、重复节奏、主体与装饰的依附关系及留白，形成一套可以整体安装在窗户上的完整装饰方案。主要组合与填充元素应相互呼应；若原图已有场景构图，保留其场景功能和区域关系并创新具体内容。
+
+【可生产的模块化】
+依据输入内容自适应组织为少量主要场景组合模块，加上必要的独立填充元素，不固定模块数量。主要模块内部可以合理接触、连接或遮叠，以保持语义和搭配关系；不同主要模块之间必须留出清晰、足够的纯白间隔，便于后续识别和拆分。
+
+【元素完整性与边缘互动】
+禁止因画布空间不足造成意外裁切、随机截断或越界。文字、面部、关键识别特征和主体轮廓不得被无意义切断；放不下的普通元素应缩小、移动或省略。
+若原设计存在从窗户底边、侧边、顶部或窗缝探入的互动关系，可设计为探头、半身、局部进入或从边缘升起，但必须作为轮廓自然收口、语义完整的独立贴纸模块。生产母版中应完整展示该模块本身并在其四周保留纯白间隔，不依靠母版画布边缘真实裁切。
+
+【文字、版权与输出】
+只有在能够逐字准确保留时才使用原图中承担主题表达的文字；无法可靠识别时不要生成文字。不得新增品牌、Logo、水印、受保护IP角色或无关文字。
+背景必须完全均匀纯白（#ffffff），不得有渐变、纹理、光照变化或阴影；图案边缘清晰，不得有白色描边或光晕。删除窗框、玻璃、墙面、户外背景、包装、商品场景、透视、反光和摄影阴影，但保留有价值的场景搭配关系。
+只输出一张正视二维平面的窗贴场景模块母版，不输出商品效果图、展示样机、规则图标网格或无关联素材清单。画布四周必须保留连续可见的纯白安全边距，任何贴纸模块均不得接触或穿出画布边缘。具体画布比例与窗格结构必须严格服从后续追加的“当前窗户模板硬约束”。"""
+
 DEFAULT_DIRECT_URL = "https://gptapi.longpean.com/gptImage/generateImageDirect"
 DEFAULT_UPLOAD_URL = "https://stpic.longpean.com/picture/upLoadQiNiu"
 DEFAULT_COMPAT_URL = "https://test-plugin.longpean.com/v1/chat/completions"
+TEMPLATE_CONSTRAINT_MARKER = "【当前窗户模板硬约束"
 SIZE_CONSTRAINT_MARKER = "【本次任务唯一尺寸约束】"
 
 
@@ -59,18 +86,27 @@ def _format_mm(value: float) -> str:
 
 
 def render_generation_prompt(custom_prompt: str | None, settings: dict[str, Any]) -> str:
-    """Materialize the one authoritative physical-size constraint for a job."""
+    """Append template and physical constraints to the user-editable common prompt."""
     base = (custom_prompt or DEFAULT_PROMPT).strip()
-    if SIZE_CONSTRAINT_MARKER in base:
-        base = base.split(SIZE_CONSTRAINT_MARKER, 1)[0].rstrip()
+    markers = [marker for marker in (TEMPLATE_CONSTRAINT_MARKER, SIZE_CONSTRAINT_MARKER) if marker in base]
+    if markers:
+        base = base[: min(base.index(marker) for marker in markers)].rstrip()
 
-    width = max(1.0, float(settings.get("install_width_mm", 450.0)))
-    height = max(1.0, float(settings.get("install_height_mm", 600.0)))
+    template = get_window_template(settings.get("window_template"), allow_legacy=True)
+    if template["id"] == "legacy":
+        raise ValueError("旧版任务未指定窗户模板；从生图阶段重跑前请先选择单窗或双栏窗")
+    width = max(1.0, float(settings.get("install_width_mm", template["default_mm"][0])))
+    height = max(1.0, float(settings.get("install_height_mm", template["default_mm"][1])))
+    template_ratio = float(template["ratio"][0]) / float(template["ratio"][1])
+    if abs((width / height) / template_ratio - 1.0) > 0.001:
+        height = width / template_ratio
     occupancy = min(1.0, max(0.01, float(settings.get("content_occupancy_ratio", 0.85))))
     ratio = Fraction(width / height).limit_denominator(100)
     orientation = "竖版" if height > width else ("横版" if width > height else "方形")
 
-    constraint = f"""{SIZE_CONSTRAINT_MARKER}
+    constraint = f"""{template["prompt_constraint"]}
+
+{SIZE_CONSTRAINT_MARKER}
 本任务只使用一套物理尺寸：目标小型窗户玻璃范围与整套窗贴推荐展开范围统一为 {_format_mm(width)} × {_format_mm(height)} mm（宽 × 高），宽高比约为 {ratio.numerator}:{ratio.denominator}，画布方向为{orientation}。这不是两套尺寸，窗贴设计完成后的整体推荐展开范围就近似等于这扇目标窗户的尺寸。
 有效图案主体与必要装饰合计应占该展开范围约 {occupancy * 100:g}%，其余作为自然留白和窗格分隔；不得把整套图案再次按另一套“贴纸尺寸”缩放。模型只需遵守比例、构图层级和相对占比，精确毫米尺寸由后续程序排版与输出阶段确定。"""
     return f"{base}\n\n{constraint}"
@@ -205,23 +241,85 @@ def upload_image_to_cloud(source_path: Path) -> tuple[str, dict[str, Any]]:
 _upload_reference = upload_image_to_cloud
 
 
-def _choose_generation_size(source_path: Path) -> str:
-    configured = os.getenv("LP_IMAGE_SIZE", "1056x1408").strip() or "1056x1408"
-    if configured.lower() != "auto":
-        return configured
-    # The product default is a 450 x 600 mm double-window installation.
-    # Keep the generated master at the same 3:4 portrait ratio even when the
-    # ecommerce reference itself is square or landscape.
-    return "1056x1408"
+def _parse_size(value: str) -> tuple[int, int]:
+    match = re.fullmatch(r"\s*(\d+)\s*[xX×]\s*(\d+)\s*", value)
+    if not match:
+        raise ValueError(f"无效的生图尺寸 {value!r}，格式应为 宽x高，例如 1216x1216")
+    width, height = int(match.group(1)), int(match.group(2))
+    if width <= 0 or height <= 0:
+        raise ValueError("生图尺寸必须大于0")
+    return width, height
 
 
-def _generate_master_direct(source_path: Path, job_dir: Path, custom_prompt: str | None = None) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
+def _choose_generation_size(source_path: Path, settings: dict[str, Any] | None = None) -> str:
+    del source_path  # The selected window template, not the source image, controls the canvas.
+    template = get_window_template((settings or {}).get("window_template"), allow_legacy=True)
+    if template["id"] == "legacy":
+        raise ValueError("旧版任务未指定窗户模板；从生图阶段重跑前请先选择单窗或双栏窗")
+    configured = os.getenv("LP_IMAGE_SIZE", "auto").strip() or "auto"
+    if configured.lower() == "auto":
+        return str(template["generation_size"])
+    width, height = _parse_size(configured)
+    actual_ratio = width / height
+    expected_ratio = expected_aspect_ratio(template["id"])
+    if expected_ratio is None or abs(actual_ratio / expected_ratio - 1.0) > 0.02:
+        raise ValueError(
+            f"LP_IMAGE_SIZE={configured} 与窗户模板 {template['id']} 的期望比例 "
+            f"{template['ratio'][0]}:{template['ratio'][1]} 不一致；请改为 auto 或匹配比例的尺寸"
+        )
+    return f"{width}x{height}"
+
+
+def _save_normalized_master(image_bytes: bytes, master_path: Path, requested_size: str) -> dict[str, Any]:
+    from io import BytesIO
+
+    target_width, target_height = _parse_size(requested_size)
+    with Image.open(BytesIO(image_bytes)) as source:
+        rgb = source.convert("RGB")
+        original_size = list(rgb.size)
+        original_ratio = rgb.width / max(rgb.height, 1)
+        target_ratio = target_width / target_height
+        ratio_deviation = abs(original_ratio / target_ratio - 1.0)
+        normalized = rgb.size != (target_width, target_height)
+        warning = None
+        if normalized:
+            scale = min(target_width / rgb.width, target_height / rgb.height)
+            resized = rgb.resize(
+                (max(1, round(rgb.width * scale)), max(1, round(rgb.height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+            canvas = Image.new("RGB", (target_width, target_height), "white")
+            canvas.paste(
+                resized,
+                ((target_width - resized.width) // 2, (target_height - resized.height) // 2),
+            )
+            rgb = canvas
+        if ratio_deviation > 0.02:
+            warning = (
+                f"生图接口实际返回比例 {original_size[0]}:{original_size[1]} 与请求比例不一致；"
+                "已保持内容比例并用白底容纳到目标画布，未拉伸内容。"
+            )
+        rgb.save(master_path)
+    return {
+        "generation_size_actual_original": original_size,
+        "generation_size_actual": [target_width, target_height],
+        "aspect_normalized": normalized,
+        "aspect_ratio_warning": warning,
+    }
+
+
+def _generate_master_direct(
+    source_path: Path,
+    job_dir: Path,
+    custom_prompt: str | None = None,
+    settings: dict[str, Any] | None = None,
+) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
     endpoint = os.getenv("LP_IMAGE_DIRECT_URL", DEFAULT_DIRECT_URL).strip()
     if not endpoint:
         raise RuntimeError("未配置 LP_IMAGE_DIRECT_URL")
     prompt = (custom_prompt or DEFAULT_PROMPT).strip()
     reference_url, upload_response = _upload_reference(source_path)
-    size = _choose_generation_size(source_path)
+    size = _choose_generation_size(source_path, settings)
     request_payload = {
         "prompt": prompt,
         "size": size,
@@ -263,9 +361,7 @@ def _generate_master_direct(source_path: Path, job_dir: Path, custom_prompt: str
     (stage_dir / "raw-response.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     (stage_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
     master_path = stage_dir / "master.png"
-    from io import BytesIO
-
-    Image.open(BytesIO(image_response.content)).convert("RGB").save(master_path)
+    size_metadata = _save_normalized_master(image_response.content, master_path, size)
     artifacts = [
         {"name": "generation-request", "label": "插件生图请求摘要", "path": stage_dir / "request-summary.json", "kind": "json"},
         {"name": "generation-upload", "label": "参考图上传响应", "path": stage_dir / "upload-response.json", "kind": "json"},
@@ -278,7 +374,8 @@ def _generate_master_direct(source_path: Path, job_dir: Path, custom_prompt: str
         "model": data.get("model", "gpt-image-2"),
         "endpoint": endpoint,
         "size_requested": size,
-        "size_actual": list(Image.open(master_path).size),
+        "size_actual": size_metadata["generation_size_actual"],
+        **size_metadata,
         "duration_ms": data.get("durationMs"),
         "tokens_used": data.get("tokensUsed"),
         "request_id": payload.get("requestId"),
@@ -288,14 +385,19 @@ def _generate_master_direct(source_path: Path, job_dir: Path, custom_prompt: str
     return master_path, artifacts, metadata
 
 
-def _generate_master_chat_compat(source_path: Path, job_dir: Path, custom_prompt: str | None = None) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
+def _generate_master_chat_compat(
+    source_path: Path,
+    job_dir: Path,
+    custom_prompt: str | None = None,
+    settings: dict[str, Any] | None = None,
+) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
     endpoint = _compat_endpoint()
     token = _compat_token()
     model = os.getenv("LP_IMAGE_MODEL", "gpt-image-2").strip() or "gpt-image-2"
     if not endpoint or not token:
         raise RuntimeError("未配置 LP_AI_BASE_URL 或 LP_AI_TOKEN；可改用“直接上传纯色母版”模式")
     prompt = (custom_prompt or DEFAULT_PROMPT).strip()
-    size = _choose_generation_size(source_path)
+    size = _choose_generation_size(source_path, settings)
     request_payload = {
         "model": model,
         "messages": [
@@ -341,9 +443,7 @@ def _generate_master_chat_compat(source_path: Path, job_dir: Path, custom_prompt
     prompt_path.write_text(prompt, encoding="utf-8")
     image_bytes = extract_image_bytes(payload)
     master_path = stage_dir / "master.png"
-    from io import BytesIO
-
-    Image.open(BytesIO(image_bytes)).convert("RGB").save(master_path)
+    size_metadata = _save_normalized_master(image_bytes, master_path, size)
     artifacts = [
         {"name": "generation-request", "label": "生图请求摘要", "path": request_path, "kind": "json"},
         {"name": "generation-response", "label": "生图原始响应", "path": raw_path, "kind": "json"},
@@ -355,12 +455,30 @@ def _generate_master_chat_compat(source_path: Path, job_dir: Path, custom_prompt
         "endpoint": endpoint,
         "prompt": prompt,
         "size_requested": size,
-        "size_actual": list(Image.open(master_path).size),
+        "size_actual": size_metadata["generation_size_actual"],
+        **size_metadata,
     }
     return master_path, artifacts, metadata
 
 
-def generate_master(source_path: Path, job_dir: Path, custom_prompt: str | None = None) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
+def generate_master(
+    source_path: Path,
+    job_dir: Path,
+    custom_prompt: str | None = None,
+    settings: dict[str, Any] | None = None,
+) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
+    template = get_window_template((settings or {}).get("window_template"), allow_legacy=True)
     if os.getenv("LP_IMAGE_PROVIDER", "chat_compat").strip().lower() == "direct":
-        return _generate_master_direct(source_path, job_dir, custom_prompt)
-    return _generate_master_chat_compat(source_path, job_dir, custom_prompt)
+        result = _generate_master_direct(source_path, job_dir, custom_prompt, settings)
+    else:
+        result = _generate_master_chat_compat(source_path, job_dir, custom_prompt, settings)
+    master_path, artifacts, metadata = result
+    metadata.update(
+        {
+            "window_template": template["id"],
+            "generation_size_requested": metadata.get("size_requested"),
+            "expected_aspect_ratio": expected_aspect_ratio(template["id"]),
+            "template_constraint_version": TEMPLATE_CONSTRAINT_VERSION,
+        }
+    )
+    return master_path, artifacts, metadata

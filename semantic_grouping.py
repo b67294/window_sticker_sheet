@@ -38,10 +38,41 @@ def semantic_grouping_configured() -> bool:
     return bool(endpoint and token)
 
 
+def _vision_models() -> list[str]:
+    configured_chain = os.getenv("LP_VISION_MODELS", "").strip()
+    if configured_chain:
+        models = [item.strip() for item in configured_chain.split(",") if item.strip()]
+        return list(dict.fromkeys(models))
+    primary = os.getenv("LP_VISION_MODEL", "codex-gpt-5.6-luna").strip() or "codex-gpt-5.6-luna"
+    fallback = os.getenv("LP_VISION_FALLBACK_MODEL", "gpt-4o").strip()
+    return list(dict.fromkeys(model for model in (primary, fallback) if model))
+
+
 def _data_url(path: Path) -> str:
-    suffix = path.suffix.lower()
-    mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}.get(suffix, "image/png")
-    return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
+    # 网关对大请求体不稳定（间歇性 10054/写超时），发送前压缩为 WebP：
+    # 体积约为原 PNG 的 1/5，保留透明通道与分辨率。压缩失败时退回原始文件。
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        max_side = int(os.getenv("LP_VISION_IMAGE_MAX_SIDE", "1536") or 1536)
+        quality = int(os.getenv("LP_VISION_IMAGE_QUALITY", "80") or 80)
+        with Image.open(path) as image:
+            image.load()
+            if max(image.size) > max_side:
+                scale = max_side / max(image.size)
+                image = image.resize(
+                    (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
+                    Image.Resampling.LANCZOS,
+                )
+            buffer = BytesIO()
+            image.save(buffer, "WEBP", quality=quality)
+        return f"data:image/webp;base64,{base64.b64encode(buffer.getvalue()).decode('ascii')}"
+    except Exception:
+        suffix = path.suffix.lower()
+        mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}.get(suffix, "image/png")
+        return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -157,13 +188,11 @@ def infer_and_apply_semantic_groups(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     endpoint = (os.getenv("LP_VISION_BASE_URL") or os.getenv("LP_COMPAT_BASE_URL") or "").strip()
     token = (os.getenv("LP_VISION_TOKEN") or os.getenv("LP_COMPAT_TOKEN") or "").strip()
-    model = os.getenv("LP_VISION_MODEL", "codex-gpt-5.6-luna").strip() or "codex-gpt-5.6-luna"
     if not endpoint or not token:
         raise RuntimeError("未配置 LP_VISION_BASE_URL 或 LP_VISION_TOKEN")
     clean_path = job_dir / "key" / "foreground.png"
     overlay_path = job_dir / "components" / "components-overlay.png"
-    request_payload = {
-        "model": model,
+    request_payload_base = {
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -177,25 +206,81 @@ def infer_and_apply_semantic_groups(
         ],
         "stream": False,
     }
-    started = time.perf_counter()
-    response = requests.post(
-        endpoint,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json=request_payload,
-        timeout=(30, 900),
-    )
-    duration = time.perf_counter() - started
-    if response.status_code >= 400:
-        raise RuntimeError(f"语义分组接口返回 HTTP {response.status_code}: {response.text[:2000]}")
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise RuntimeError("语义分组接口没有返回 JSON") from exc
-    try:
-        content = payload["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError("语义分组接口响应缺少 choices[0].message.content") from exc
-    relations = _extract_json_object(content)
+    attempts: list[dict[str, Any]] = []
+    payload: dict[str, Any] | None = None
+    relations: dict[str, Any] | None = None
+    selected_model: str | None = None
+    request_payload: dict[str, Any] | None = None
+    total_started = time.perf_counter()
+    retry_rounds = max(1, int(os.getenv("LP_VISION_RETRY_ROUNDS", "2") or 2))
+    retry_delay = float(os.getenv("LP_VISION_RETRY_DELAY", "3") or 3)
+    plan = [
+        (round_index, model)
+        for round_index in range(1, retry_rounds + 1)
+        for model in _vision_models()
+    ]
+    for index, (round_index, model) in enumerate(plan, start=1):
+        request_payload = {"model": model, **request_payload_base}
+        attempt_started = time.perf_counter()
+        attempt: dict[str, Any] = {
+            "attempt": index,
+            "round": round_index,
+            "model": model,
+            "status": "failed",
+        }
+        try:
+            response = requests.post(
+                endpoint,
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json=request_payload,
+                # 连接超时同时约束请求体写入（urllib3 行为），大请求体需要比 30s 更宽裕。
+                timeout=(120, 900),
+            )
+            attempt["http_status"] = response.status_code
+            if response.status_code >= 400:
+                raise RuntimeError(
+                    f"HTTP {response.status_code}: {response.text[:2000]}"
+                )
+            try:
+                candidate_payload = response.json()
+            except ValueError as exc:
+                raise RuntimeError("接口没有返回 JSON") from exc
+            try:
+                content = candidate_payload["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError) as exc:
+                raise RuntimeError(
+                    "接口响应缺少 choices[0].message.content"
+                ) from exc
+            candidate_relations = _extract_json_object(content)
+            payload = candidate_payload
+            relations = candidate_relations
+            selected_model = model
+            attempt["status"] = "success"
+            attempt["response_id"] = (
+                candidate_payload.get("id")
+                if isinstance(candidate_payload, dict)
+                else None
+            )
+        except (requests.RequestException, RuntimeError, ValueError) as exc:
+            attempt["error"] = str(exc)[:2000]
+            # 连接被网关掐断（10054/写超时）多为瞬时故障，稍等再试下一个。
+            if isinstance(exc, requests.RequestException) and index < len(plan):
+                time.sleep(retry_delay)
+        finally:
+            attempt["duration_seconds"] = round(
+                time.perf_counter() - attempt_started,
+                3,
+            )
+            attempts.append(attempt)
+        if attempt["status"] == "success":
+            break
+    duration = time.perf_counter() - total_started
+    if payload is None or relations is None or selected_model is None or request_payload is None:
+        summary = "；".join(
+            f"{item['model']}: {item.get('error', '未知错误')}"
+            for item in attempts
+        )
+        raise RuntimeError(f"语义分组所有模型均失败，将降级为距离分组：{summary}")
     groups, applied = apply_semantic_relations(
         primitives,
         groups,
@@ -206,28 +291,39 @@ def infer_and_apply_semantic_groups(
     stage_dir = job_dir / "components" / "semantic"
     stage_dir.mkdir(parents=True, exist_ok=True)
     request_summary = json.loads(json.dumps(request_payload, ensure_ascii=False))
-    request_summary["messages"][1]["content"][1]["image_url"]["url"] = f"<data-url:{clean_path.name}:{clean_path.stat().st_size} bytes>"
-    request_summary["messages"][1]["content"][2]["image_url"]["url"] = f"<data-url:{overlay_path.name}:{overlay_path.stat().st_size} bytes>"
+    for position, source_path in ((1, clean_path), (2, overlay_path)):
+        sent_bytes = len(request_summary["messages"][1]["content"][position]["image_url"]["url"])
+        request_summary["messages"][1]["content"][position]["image_url"]["url"] = (
+            f"<data-url:{source_path.name}:发送 {sent_bytes} bytes（原文件 {source_path.stat().st_size} bytes）>"
+        )
     paths = {
         "request": stage_dir / "request-summary.json",
         "response": stage_dir / "raw-response.json",
+        "attempts": stage_dir / "attempts.json",
         "relations": stage_dir / "relations.json",
         "application": stage_dir / "application.json",
     }
     paths["request"].write_text(json.dumps(request_summary, ensure_ascii=False, indent=2), encoding="utf-8")
     paths["response"].write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    paths["attempts"].write_text(json.dumps(attempts, ensure_ascii=False, indent=2), encoding="utf-8")
     paths["relations"].write_text(json.dumps(relations, ensure_ascii=False, indent=2), encoding="utf-8")
     application = {"applied": applied, "min_confidence": float(settings.get("semantic_min_confidence", 0.9))}
     paths["application"].write_text(json.dumps(application, ensure_ascii=False, indent=2), encoding="utf-8")
     artifacts = [
         {"name": "semantic-request", "label": "语义分组请求摘要", "path": paths["request"], "kind": "json"},
         {"name": "semantic-response", "label": "语义分组原始响应", "path": paths["response"], "kind": "json"},
+        {"name": "semantic-attempts", "label": "语义模型主备尝试记录", "path": paths["attempts"], "kind": "json"},
         {"name": "semantic-relations", "label": "视觉模型关系 JSON", "path": paths["relations"], "kind": "json"},
         {"name": "semantic-application", "label": "语义关系应用结果", "path": paths["application"], "kind": "json"},
     ]
     metadata = {
         "status": "complete",
-        "model": model,
+        "model": selected_model,
+        "primary_model": _vision_models()[0],
+        "fallback_model": _vision_models()[1] if len(_vision_models()) > 1 else None,
+        "model_chain": _vision_models(),
+        "fallback_used": len(attempts) > 1,
+        "attempts": attempts,
         "endpoint": endpoint,
         "duration_seconds": round(duration, 3),
         "response_id": payload.get("id") if isinstance(payload, dict) else None,

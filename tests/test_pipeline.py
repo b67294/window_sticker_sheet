@@ -9,9 +9,10 @@ from shapely.geometry import box, mapping, shape
 import pipeline
 
 
-def test_default_installation_size_is_portrait_window():
+def test_default_installation_size_is_double_window():
     defaults = pipeline.default_settings()
-    assert defaults["install_width_mm"] == 450.0
+    assert defaults["window_template"] == "double"
+    assert defaults["install_width_mm"] == 600.0
     assert defaults["install_height_mm"] == 600.0
     assert defaults["content_occupancy_ratio"] == 0.85
     assert defaults["sheet_margin_mm"] == 10.0
@@ -19,6 +20,17 @@ def test_default_installation_size_is_portrait_window():
     assert defaults["alignment_weight"] == 0.25
     assert defaults["balance_weight"] == 0.10
     assert defaults["max_shrink_ratio"] == 0.08
+
+
+def test_template_settings_load_recommended_size_and_lock_ratio():
+    single = pipeline.merge_settings({"window_template": "single"})
+    assert (single["install_width_mm"], single["install_height_mm"]) == (450.0, 600.0)
+    resized_from_height = pipeline.merge_settings(
+        {"window_template": "single", "install_height_mm": 800}
+    )
+    assert (resized_from_height["install_width_mm"], resized_from_height["install_height_mm"]) == (600.0, 800.0)
+    double = pipeline.merge_settings({"window_template": "double", "install_width_mm": 720})
+    assert (double["install_width_mm"], double["install_height_mm"]) == (720.0, 720.0)
 
 
 def test_content_scale_ignores_arbitrary_outer_whitespace():
@@ -142,6 +154,11 @@ def test_full_algorithm_pipeline(tmp_path):
     )
     assert physical_scale["recommended_display_width_mm"] == config["install_width_mm"]
     assert physical_scale["content_occupancy_ratio"] == config["content_occupancy_ratio"]
+    assert physical_scale["window_template"] == "double"
+    assert physical_scale["pane_layout"]["pane_count"] == 2
+    assert physical_scale["pane_layout"]["center_gap_mm"] == pytest.approx(
+        config["install_width_mm"] * 0.06
+    )
     for item in geometry:
         visible = shape(item["visible"])
         cutline = shape(item["cutline"])

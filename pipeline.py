@@ -20,13 +20,16 @@ from shapely import affinity, make_valid
 from shapely.geometry import GeometryCollection, Polygon, box, mapping, shape
 from shapely.ops import unary_union
 
+from window_templates import DEFAULT_WINDOW_TEMPLATE, get_window_template, pane_layout
+
 
 STAGES = ["input", "generate", "key", "components", "geometry", "layout"]
 
 
 def default_settings() -> dict[str, Any]:
     return {
-        "install_width_mm": 450.0,
+        "window_template": DEFAULT_WINDOW_TEMPLATE,
+        "install_width_mm": 600.0,
         "install_height_mm": 600.0,
         "content_occupancy_ratio": 0.85,
         "sheet_width_mm": 381.0,
@@ -58,6 +61,7 @@ def default_settings() -> dict[str, Any]:
 
 def merge_settings(settings: dict[str, Any] | None) -> dict[str, Any]:
     merged = default_settings()
+    incoming: dict[str, Any] = {}
     if settings:
         incoming = dict(settings)
         if "compactness_weight" not in incoming and "utilization_weight" in incoming:
@@ -74,6 +78,24 @@ def merge_settings(settings: dict[str, Any] | None) -> dict[str, Any]:
         1.0,
         max(0.5, float(merged.get("content_occupancy_ratio", 0.85))),
     )
+    template = get_window_template(merged.get("window_template"), allow_legacy=True)
+    merged["window_template"] = template["id"]
+    if template["id"] != "legacy":
+        ratio = float(template["ratio"][0]) / float(template["ratio"][1])
+        has_width = "install_width_mm" in incoming
+        has_height = "install_height_mm" in incoming
+        if "window_template" in incoming and not has_width and not has_height:
+            width, height = map(float, template["default_mm"])
+        elif has_height and not has_width:
+            height = max(10.0, float(incoming["install_height_mm"]))
+            width = height * ratio
+        else:
+            width = max(10.0, float(merged.get("install_width_mm", template["default_mm"][0])))
+            height = max(10.0, float(merged.get("install_height_mm", template["default_mm"][1])))
+        if abs((width / height) / ratio - 1.0) > 0.001:
+            height = width / ratio
+        merged["install_width_mm"] = width
+        merged["install_height_mm"] = height
     merged["layout_mode"] = "tidy_compact"
     return merged
 
@@ -621,6 +643,12 @@ def run_geometry(job: dict[str, Any], job_dir: Path, settings: dict[str, Any]) -
         master_height,
     )
     scale_metadata = {
+        "window_template": settings.get("window_template", "legacy"),
+        "pane_layout": pane_layout(
+            settings.get("window_template", "legacy"),
+            float(settings["install_width_mm"]),
+            float(settings["install_height_mm"]),
+        ),
         "recommended_display_width_mm": float(settings["install_width_mm"]),
         "recommended_display_height_mm": float(settings["install_height_mm"]),
         "content_occupancy_ratio": float(settings["content_occupancy_ratio"]),
@@ -1232,9 +1260,13 @@ def select_candidate(
 ) -> dict[str, Any]:
     if not candidates:
         raise ValueError("没有可选择的候选方案")
+    # 被禁用的候选仍会渲染展示，但不参与自动选择；全部禁用时退回全量兜底。
+    eligible = [item for item in candidates if item.get("enabled", True)]
+    if not eligible:
+        eligible = candidates
     if highest_score:
         return max(
-            candidates,
+            eligible,
             key=lambda item: (
                 float(item.get("score", 0.0)),
                 -int(item.get("page_count", 0)),
@@ -1242,7 +1274,7 @@ def select_candidate(
                 -float(item.get("largest_void_ratio", 1.0)),
             ),
         )
-    return min(candidates, key=_candidate_rank)
+    return min(eligible, key=_candidate_rank)
 
 
 def _quick_shelf_rank(
@@ -1433,6 +1465,7 @@ def run_layout(job: dict[str, Any], job_dir: Path, settings: dict[str, Any]) -> 
     if not geometries:
         raise ValueError("没有可排版的贴纸组")
     strategies = ["tidy_rows", "maxrects", "hybrid_fill", "center_compact"]
+    disabled_strategies = {"tidy_rows"}
     seeds = [11, 23, 37, 53]
     candidates: list[dict[str, Any]] = []
     artifacts: list[dict[str, Any]] = []
@@ -1450,6 +1483,7 @@ def run_layout(job: dict[str, Any], job_dir: Path, settings: dict[str, Any]) -> 
         strategy = strategies[index - 1]
         candidate_id = f"candidate-{index}"
         candidate["id"] = candidate_id
+        candidate["enabled"] = strategy not in disabled_strategies
         candidate["settings"] = {
             "sheet_width_mm": float(settings["sheet_width_mm"]),
             "sheet_height_mm": float(settings["sheet_height_mm"]),
@@ -1601,6 +1635,12 @@ def render_selected_outputs(
             pdf_error = str(exc)
     manifest = {
         "delivery_render_version": 2,
+        "window_template": settings.get("window_template", "legacy"),
+        "pane_layout": pane_layout(
+            settings.get("window_template", "legacy"),
+            float(settings["install_width_mm"]),
+            float(settings["install_height_mm"]),
+        ),
         "selected_candidate": candidate["id"],
         "page_count": candidate["page_count"],
         "layout_scale": candidate.get("layout_scale", 1.0),

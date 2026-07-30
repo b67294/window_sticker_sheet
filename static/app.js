@@ -7,13 +7,8 @@ const inputModeNotes = {
   source: "可一次选择多张图；先逐张强衍生创新为白底母版，再自动去背景、提取组件并选择总分最高候选。",
 };
 const inputModeNames = { master: "白底母版", alpha: "透明 PNG", source: "电商原图" };
-const sizePresets = {
-  small: [450, 600],
-  standard: [600, 800],
-  large: [750, 1000],
-};
-
 let defaults = null;
+let windowTemplates = {};
 let currentJob = null;
 let currentBatch = null;
 let activeStage = "input";
@@ -22,6 +17,8 @@ let selectedGroups = new Set();
 let pollTimer = null;
 let canvasImage = null;
 let pendingUpload = false;
+let syncingTemplateDimensions = false;
+let promptPreviewTimer = null;
 
 async function api(url, options = {}) {
   const response = await fetch(url, options);
@@ -57,6 +54,7 @@ function setInputMode(value) {
   $("key-stage-option").textContent = value === "alpha" ? "运行到 Alpha 直通" : "运行到去背景";
   if (activeStage === "key") $("stage-title").textContent = displayStageName("key", value);
   if (pendingUpload) markPendingUpload();
+  validateSelectedImageAspect();
 }
 
 function selectedFiles() {
@@ -100,22 +98,99 @@ function populateSettings(settings) {
     else if (input.dataset.settingTransform === "percent") input.value = Number(settings[key]) * 100;
     else input.value = settings[key];
   });
-  syncSizePreset();
+  renderWindowTemplateInfo();
   updateWeightOutputs();
+  schedulePromptPreview();
 }
 
-function syncSizePreset() {
-  const width = Number($("install-width").value);
-  const height = Number($("install-height").value);
-  const match = Object.entries(sizePresets).find(([, values]) => values[0] === width && values[1] === height);
-  $("size-preset").value = match?.[0] || "custom";
+function currentTemplate() {
+  return windowTemplates[$("window-template").value] || null;
 }
 
-function applySizePreset() {
-  const values = sizePresets[$("size-preset").value];
-  if (!values) return;
-  $("install-width").value = values[0];
-  $("install-height").value = values[1];
+function renderWindowTemplateInfo() {
+  const template = currentTemplate();
+  if (!template) {
+    $("window-template-description").textContent = "历史任务未指定模板；再次生图前请选择单窗或双栏窗。";
+    $("window-template-constraint").textContent = "旧版未指定";
+    return;
+  }
+  $("window-template-description").textContent =
+    `${template.description} · 生成画布 ${template.generation_size}`;
+  $("window-template-constraint").textContent = template.prompt_constraint;
+}
+
+function applyWindowTemplate() {
+  const template = currentTemplate();
+  if (!template) return;
+  syncingTemplateDimensions = true;
+  $("install-width").value = template.default_mm[0];
+  $("install-height").value = template.default_mm[1];
+  syncingTemplateDimensions = false;
+  renderWindowTemplateInfo();
+  validateSelectedImageAspect();
+  schedulePromptPreview();
+}
+
+function syncTemplateDimension(source) {
+  if (syncingTemplateDimensions) return;
+  const template = currentTemplate();
+  if (!template) return;
+  const ratio = Number(template.ratio[0]) / Number(template.ratio[1]);
+  syncingTemplateDimensions = true;
+  if (source === "width") {
+    $("install-height").value = (Number($("install-width").value) / ratio).toFixed(1).replace(/\.0$/, "");
+  } else {
+    $("install-width").value = (Number($("install-height").value) * ratio).toFixed(1).replace(/\.0$/, "");
+  }
+  syncingTemplateDimensions = false;
+  schedulePromptPreview();
+}
+
+function schedulePromptPreview() {
+  clearTimeout(promptPreviewTimer);
+  promptPreviewTimer = setTimeout(updatePromptPreview, 220);
+}
+
+async function updatePromptPreview() {
+  if (!defaults || $("window-template").value === "legacy") {
+    $("generation-prompt-preview").textContent = "旧版任务未指定模板，请先选择单窗或双栏窗。";
+    return;
+  }
+  try {
+    const result = await api("/api/prompts/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        generation_prompt_base: $("generation-prompt").value,
+        settings: collectSettings(),
+      }),
+    });
+    $("generation-prompt-preview").textContent = result.prompt;
+  } catch (error) {
+    $("generation-prompt-preview").textContent = error.message;
+  }
+}
+
+function validateSelectedImageAspect() {
+  const warning = $("aspect-warning");
+  warning.hidden = true;
+  const file = selectedFiles()[0];
+  const template = currentTemplate();
+  if (!file || inputMode === "source" || !template) return;
+  const image = new Image();
+  const url = URL.createObjectURL(file);
+  image.onload = () => {
+    URL.revokeObjectURL(url);
+    const actual = image.naturalWidth / image.naturalHeight;
+    const expected = Number(template.ratio[0]) / Number(template.ratio[1]);
+    const deviation = Math.abs(actual / expected - 1);
+    if (deviation > 0.02) {
+      warning.textContent = `比例警告：上传图片为 ${image.naturalWidth}×${image.naturalHeight}，与${template.label}偏差 ${(deviation * 100).toFixed(1)}%。仍可继续，系统不会拉伸或自动裁切。`;
+      warning.hidden = false;
+    }
+  };
+  image.onerror = () => URL.revokeObjectURL(url);
+  image.src = url;
 }
 
 function collectSettings() {
@@ -158,7 +233,17 @@ function renderJob(job) {
     return;
   }
   setInputMode(job.input_mode || inputMode);
+  if (job.settings?.window_template === "legacy" && !$("window-template").querySelector('option[value="legacy"]')) {
+    $("window-template").insertAdjacentHTML("beforeend", '<option value="legacy">旧版未指定</option>');
+  }
   populateSettings(job.settings || defaults?.settings || {});
+  $("generation-prompt").value = job.generation_prompt_base || defaults?.generation_prompt || "";
+  if (job.aspect_ratio_warning) {
+    $("aspect-warning").textContent = `比例警告：${job.aspect_ratio_warning.message}`;
+    $("aspect-warning").hidden = false;
+  } else {
+    $("aspect-warning").hidden = true;
+  }
   localStorage.setItem("windowStickerJobId", job.id);
   localStorage.removeItem("windowStickerBatchId");
   $("batch-view").hidden = true;
@@ -377,10 +462,10 @@ function renderCandidates() {
   const grid = $("candidate-grid");
   const strategyNames = { tidy_rows: "整齐行列", maxrects: "MaxRects 紧凑", hybrid_fill: "异形填缝", center_compact: "中心紧凑" };
   grid.innerHTML = (currentJob.candidates || []).map((candidate) => `
-    <article class="candidate-card ${currentJob.selected_candidate === candidate.id ? "selected" : ""}">
+    <article class="candidate-card ${currentJob.selected_candidate === candidate.id ? "selected" : ""} ${candidate.enabled === false ? "disabled" : ""}">
       <img src="${candidate.contact_sheet_url}" alt="${candidate.id}">
       <div class="candidate-meta">
-        <div class="candidate-title"><strong>${strategyNames[candidate.strategy] || candidate.strategy}</strong>${currentJob.selected_candidate === candidate.id ? '<span>当前选中</span>' : ''}</div>
+        <div class="candidate-title"><strong>${strategyNames[candidate.strategy] || candidate.strategy}</strong>${currentJob.selected_candidate === candidate.id ? '<span>当前选中</span>' : ''}${candidate.enabled === false ? '<span style="color:#999;font-weight:normal">（已禁用）</span>' : ''}</div>
         <div class="metrics">
           <div class="metric"><b>${candidate.page_count}</b><small>页数</small></div>
           <div class="metric"><b>${formatPercent(candidate.layout_scale)}</b><small>实际尺寸</small></div>
@@ -391,7 +476,7 @@ function renderCandidates() {
           <div class="metric"><b>${formatPercent(candidate.balance)}</b><small>平衡</small></div>
           <div class="metric"><b>${formatPercent(candidate.score)}</b><small>总分</small></div>
         </div>
-        <button data-candidate-id="${candidate.id}">选择此方案</button>
+        <button data-candidate-id="${candidate.id}" ${candidate.enabled === false ? "disabled" : ""}>选择此方案</button>
         ${currentJob.selected_candidate === candidate.id && currentJob.final_pdf_url ? `
           <div class="candidate-downloads">
             <a class="pdf-primary" href="${currentJob.final_pdf_url}" target="_blank">下载全部 Sheet PDF（${candidate.page_count} 页）</a>
@@ -661,8 +746,13 @@ async function showHistory() {
 async function init() {
   try {
     defaults = await api("/api/defaults");
+    windowTemplates = Object.fromEntries((defaults.window_templates || []).map((item) => [item.id, item]));
+    $("window-template").innerHTML = (defaults.window_templates || []).map((item) =>
+      `<option value="${item.id}">${escapeHtml(item.label)}${item.id === defaults.default_window_template ? "（默认）" : ""}</option>`
+    ).join("");
     populateSettings(defaults.settings);
     $("generation-prompt").value = defaults.generation_prompt;
+    $("generation-prompt-preview").textContent = defaults.generation_prompt_preview || "";
     const providers = [
       defaults.generation_configured ? "gpt-image-2 已配置" : "gpt-image-2 未配置",
       defaults.comfyui_configured ? "ComfyUI 工作流已配置" : "ComfyUI 工作流未配置",
@@ -685,20 +775,54 @@ document.querySelectorAll("#stepper button").forEach((button) => button.addEvent
 document.querySelectorAll("[data-group-action]").forEach((button) => button.addEventListener("click", () => groupAction(button.dataset.groupAction)));
 $("file").addEventListener("change", () => {
   renderUploadList();
-  if ($("file").files[0]) markPendingUpload();
+  if ($("file").files[0]) {
+    markPendingUpload();
+    validateSelectedImageAspect();
+  }
 });
 $("job-form").addEventListener("submit", createAndRun);
 $("compactness-weight").addEventListener("input", updateWeightOutputs);
 $("alignment-weight").addEventListener("input", updateWeightOutputs);
 $("balance-weight").addEventListener("input", updateWeightOutputs);
-$("size-preset").addEventListener("change", applySizePreset);
-$("install-width").addEventListener("input", syncSizePreset);
-$("install-height").addEventListener("input", syncSizePreset);
+$("window-template").addEventListener("change", applyWindowTemplate);
+$("install-width").addEventListener("input", () => syncTemplateDimension("width"));
+$("install-height").addEventListener("input", () => syncTemplateDimension("height"));
+$("generation-prompt").addEventListener("input", schedulePromptPreview);
 $("rerun").addEventListener("click", rerun);
 $("run-stage").addEventListener("click", runCurrentStage);
 $("group-canvas").addEventListener("click", canvasClick);
 $("save-group-options").addEventListener("click", saveGroupOptions);
 $("load-jobs").addEventListener("click", showHistory);
+$("restart-service").addEventListener("click", restartService);
+
+async function restartService() {
+  if (!confirm("确定重启服务吗？正在运行中的任务会被中断。")) return;
+  const button = $("restart-service");
+  button.disabled = true;
+  button.textContent = "重启中…";
+  try {
+    await fetch("/api/restart", { method: "POST" });
+  } catch (error) {
+    // 服务退出瞬间连接可能被切断，属于预期，继续轮询健康检查。
+  }
+  const deadline = Date.now() + 60000;
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch("/api/health", { cache: "no-store" });
+      if (response.ok) {
+        location.reload();
+        return;
+      }
+    } catch (error) {
+      // 服务还没起来，继续等。
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  button.disabled = false;
+  button.textContent = "重启服务";
+  alert("等待服务恢复超时，请检查 server.out.log 或手动运行 start.bat。");
+}
 $("retry-batch").addEventListener("click", retryBatch);
 $("render-batch-pdf").addEventListener("click", renderBatchPdfs);
 $("close-history").addEventListener("click", () => $("history-dialog").close());

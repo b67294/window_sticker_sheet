@@ -30,6 +30,31 @@ def transparent_upload_bytes():
     return output.getvalue()
 
 
+def test_defaults_publish_window_templates_and_upload_warns_on_ratio(tmp_path, monkeypatch):
+    monkeypatch.setattr(webapp, "RUNS_DIR", tmp_path)
+    webapp._jobs.clear()
+    client = TestClient(webapp.app)
+    defaults = client.get("/api/defaults").json()
+    assert defaults["default_window_template"] == "double"
+    assert {item["id"]: item["generation_size"] for item in defaults["window_templates"]} == {
+        "single": "1056x1408",
+        "double": "1216x1216",
+    }
+    response = client.post(
+        "/api/jobs",
+        data={
+            "input_mode": "master",
+            "settings_json": json.dumps({"window_template": "single"}),
+            "generation_prompt": "",
+        },
+        files={"file": ("wide-master.png", upload_bytes(), "image/png")},
+    )
+    assert response.status_code == 200
+    warning = response.json()["aspect_ratio_warning"]
+    assert warning["code"] == "aspect_ratio_mismatch"
+    assert warning["expected_aspect_ratio"] == 0.75
+
+
 def test_direct_master_job(tmp_path, monkeypatch):
     monkeypatch.setattr(webapp, "RUNS_DIR", tmp_path)
     webapp._jobs.clear()
@@ -68,7 +93,15 @@ def test_direct_master_job(tmp_path, monkeypatch):
     assert abs(width_pt - settings["sheet_width_mm"] * 72 / 25.4) < 0.1
     assert abs(height_pt - settings["sheet_height_mm"] * 72 / 25.4) < 0.1
 
-    other = next(item for item in job["candidates"] if item["id"] != job["selected_candidate"])
+    disabled = next(item for item in job["candidates"] if item.get("enabled") is False)
+    assert disabled["id"] != job["selected_candidate"]
+    response = client.post(f"/api/jobs/{job_id}/candidates/{disabled['id']}/select")
+    assert response.status_code == 400
+
+    other = next(
+        item for item in job["candidates"]
+        if item["id"] != job["selected_candidate"] and item.get("enabled", True)
+    )
     response = client.post(f"/api/jobs/{job_id}/candidates/{other['id']}/select")
     assert response.status_code == 200
     selected_job = response.json()
@@ -204,7 +237,8 @@ def test_ecommerce_batch_creates_independent_serial_children(tmp_path, monkeypat
     child_jobs = [webapp._jobs[item["job_id"]] for item in batch["items"]]
     assert all(job["input_mode"] == "source" for job in child_jobs)
     assert all(job["generation_prompt"].startswith(prompt) for job in child_jobs)
-    assert all("450 × 600 mm" in job["generation_prompt"] for job in child_jobs)
+    assert all("600 × 600 mm" in job["generation_prompt"] for job in child_jobs)
+    assert all(job["settings"]["window_template"] == "double" for job in child_jobs)
     assert all(job["generation_prompt"].count("【本次任务唯一尺寸约束】") == 1 for job in child_jobs)
     assert all(job["render_pdf"] is True for job in child_jobs)
     assert len({webapp.job_dir(job["id"]) for job in child_jobs}) == 3

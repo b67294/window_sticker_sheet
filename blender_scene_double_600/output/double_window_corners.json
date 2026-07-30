@@ -1,0 +1,609 @@
+{
+  "schema_version": "1.0",
+  "interpretation": "The complete two-pane sticker envelope is 600 x 600 mm. A 28 mm center mullion divides it into two 286 x 600 mm glass panes.",
+  "units": {
+    "world": "meter",
+    "physical_dimensions": "millimeter",
+    "image": "pixel"
+  },
+  "room": {
+    "width_mm": 4000,
+    "depth_mm": 5000,
+    "height_mm": 2800
+  },
+  "double_window": {
+    "overall_target_width_mm": 600,
+    "overall_target_height_mm": 600,
+    "bottom_from_floor_mm": 850,
+    "center_mullion_width_mm": 28,
+    "left_pane_width_mm": 286,
+    "right_pane_width_mm": 286,
+    "pane_height_mm": 600
+  },
+  "render": {
+    "width_px": 2048,
+    "height_px": 1536,
+    "pixel_origin": "top-left"
+  },
+  "corner_order": [
+    "top_left",
+    "top_right",
+    "bottom_right",
+    "bottom_left"
+  ],
+  "cameras": {
+    "front": {
+      "horizontal_angle_deg": 0.0,
+      "focal_length_mm": 50.0,
+      "sensor_width_mm": 36.0,
+      "location_world_m": [
+        -0.0,
+        -2.26600003,
+        1.54999995
+      ],
+      "rotation_euler_radians": [
+        1.50705302,
+        -0.0,
+        0.0
+      ],
+      "clay_image": "front_double_clay.jpg",
+      "combined_glass_mask": "front_double_glass_mask.png",
+      "overall_600x600_corners": {
+        "top_left": {
+          "world_m": [
+            -0.3,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 842.159,
+            "y": 647.177,
+            "normalized_x": 0.41121024,
+            "normalized_y": 0.42133909,
+            "depth_camera_space_m": 4.69273329
+          }
+        },
+        "top_right": {
+          "world_m": [
+            0.3,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 1205.841,
+            "y": 647.177,
+            "normalized_x": 0.58878976,
+            "normalized_y": 0.42133909,
+            "depth_camera_space_m": 4.69273329
+          }
+        },
+        "bottom_right": {
+          "world_m": [
+            0.3,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 1204.372,
+            "y": 1008.165,
+            "normalized_x": 0.58807248,
+            "normalized_y": 0.65635744,
+            "depth_camera_space_m": 4.73095322
+          }
+        },
+        "bottom_left": {
+          "world_m": [
+            -0.3,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 843.628,
+            "y": 1008.165,
+            "normalized_x": 0.41192755,
+            "normalized_y": 0.65635744,
+            "depth_camera_space_m": 4.73095322
+          }
+        }
+      },
+      "left_pane_corners": {
+        "top_left": {
+          "world_m": [
+            -0.3,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 842.159,
+            "y": 647.177,
+            "normalized_x": 0.41121024,
+            "normalized_y": 0.42133909,
+            "depth_camera_space_m": 4.69273329
+          }
+        },
+        "top_right": {
+          "world_m": [
+            -0.014,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 1015.514,
+            "y": 647.177,
+            "normalized_x": 0.49585646,
+            "normalized_y": 0.42133909,
+            "depth_camera_space_m": 4.69273329
+          }
+        },
+        "bottom_right": {
+          "world_m": [
+            -0.014,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 1015.583,
+            "y": 1008.165,
+            "normalized_x": 0.49588996,
+            "normalized_y": 0.65635744,
+            "depth_camera_space_m": 4.73095322
+          }
+        },
+        "bottom_left": {
+          "world_m": [
+            -0.3,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 843.628,
+            "y": 1008.165,
+            "normalized_x": 0.41192755,
+            "normalized_y": 0.65635744,
+            "depth_camera_space_m": 4.73095322
+          }
+        }
+      },
+      "right_pane_corners": {
+        "top_left": {
+          "world_m": [
+            0.014,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 1032.486,
+            "y": 647.177,
+            "normalized_x": 0.50414354,
+            "normalized_y": 0.42133909,
+            "depth_camera_space_m": 4.69273329
+          }
+        },
+        "top_right": {
+          "world_m": [
+            0.3,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 1205.841,
+            "y": 647.177,
+            "normalized_x": 0.58878976,
+            "normalized_y": 0.42133909,
+            "depth_camera_space_m": 4.69273329
+          }
+        },
+        "bottom_right": {
+          "world_m": [
+            0.3,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 1204.372,
+            "y": 1008.165,
+            "normalized_x": 0.58807248,
+            "normalized_y": 0.65635744,
+            "depth_camera_space_m": 4.73095322
+          }
+        },
+        "bottom_left": {
+          "world_m": [
+            0.014,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 1032.417,
+            "y": 1008.165,
+            "normalized_x": 0.50411004,
+            "normalized_y": 0.65635744,
+            "depth_camera_space_m": 4.73095322
+          }
+        }
+      }
+    },
+    "left_10deg": {
+      "horizontal_angle_deg": 10.0,
+      "focal_length_mm": 50.0,
+      "sensor_width_mm": 36.0,
+      "location_world_m": [
+        -0.81614643,
+        -2.19459653,
+        1.54999995
+      ],
+      "rotation_euler_radians": [
+        1.50705302,
+        -1e-08,
+        -0.17453294
+      ],
+      "clay_image": "left_10deg_double_clay.jpg",
+      "combined_glass_mask": "left_10deg_double_glass_mask.png",
+      "overall_600x600_corners": {
+        "top_left": {
+          "world_m": [
+            -0.3,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 843.354,
+            "y": 647.856,
+            "normalized_x": 0.41179383,
+            "normalized_y": 0.42178154,
+            "depth_camera_space_m": 4.64080667
+          }
+        },
+        "top_right": {
+          "world_m": [
+            0.3,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 1201.541,
+            "y": 646.511,
+            "normalized_x": 0.58669001,
+            "normalized_y": 0.42090529,
+            "depth_camera_space_m": 4.74478388
+          }
+        },
+        "bottom_right": {
+          "world_m": [
+            0.3,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 1200.122,
+            "y": 1003.576,
+            "normalized_x": 0.58599728,
+            "normalized_y": 0.65336958,
+            "depth_camera_space_m": 4.78300428
+          }
+        },
+        "bottom_left": {
+          "world_m": [
+            -0.3,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 844.829,
+            "y": 1012.845,
+            "normalized_x": 0.41251433,
+            "normalized_y": 0.65940446,
+            "depth_camera_space_m": 4.6790266
+          }
+        }
+      },
+      "left_pane_corners": {
+        "top_left": {
+          "world_m": [
+            -0.3,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 843.354,
+            "y": 647.856,
+            "normalized_x": 0.41179383,
+            "normalized_y": 0.42178154,
+            "depth_camera_space_m": 4.64080667
+          }
+        },
+        "top_right": {
+          "world_m": [
+            -0.014,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 1016.07,
+            "y": 647.207,
+            "normalized_x": 0.49612817,
+            "normalized_y": 0.421359,
+            "depth_camera_space_m": 4.69036913
+          }
+        },
+        "bottom_right": {
+          "world_m": [
+            -0.014,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 1016.135,
+            "y": 1008.376,
+            "normalized_x": 0.49615946,
+            "normalized_y": 0.65649474,
+            "depth_camera_space_m": 4.72858906
+          }
+        },
+        "bottom_left": {
+          "world_m": [
+            -0.3,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 844.829,
+            "y": 1012.845,
+            "normalized_x": 0.41251433,
+            "normalized_y": 0.65940446,
+            "depth_camera_space_m": 4.6790266
+          }
+        }
+      },
+      "right_pane_corners": {
+        "top_left": {
+          "world_m": [
+            0.014,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 1032.784,
+            "y": 647.145,
+            "normalized_x": 0.50428897,
+            "normalized_y": 0.42131811,
+            "depth_camera_space_m": 4.69522142
+          }
+        },
+        "top_right": {
+          "world_m": [
+            0.3,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 1201.541,
+            "y": 646.511,
+            "normalized_x": 0.58669001,
+            "normalized_y": 0.42090529,
+            "depth_camera_space_m": 4.74478388
+          }
+        },
+        "bottom_right": {
+          "world_m": [
+            0.3,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 1200.122,
+            "y": 1003.576,
+            "normalized_x": 0.58599728,
+            "normalized_y": 0.65336958,
+            "depth_camera_space_m": 4.78300428
+          }
+        },
+        "bottom_left": {
+          "world_m": [
+            0.014,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 1032.713,
+            "y": 1007.943,
+            "normalized_x": 0.50425434,
+            "normalized_y": 0.65621313,
+            "depth_camera_space_m": 4.73344135
+          }
+        }
+      }
+    },
+    "right_10deg": {
+      "horizontal_angle_deg": -10.0,
+      "focal_length_mm": 50.0,
+      "sensor_width_mm": 36.0,
+      "location_world_m": [
+        0.81614643,
+        -2.19459653,
+        1.54999995
+      ],
+      "rotation_euler_radians": [
+        1.50705302,
+        1e-08,
+        0.17453294
+      ],
+      "clay_image": "right_10deg_double_clay.jpg",
+      "combined_glass_mask": "right_10deg_double_glass_mask.png",
+      "overall_600x600_corners": {
+        "top_left": {
+          "world_m": [
+            -0.3,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 846.459,
+            "y": 646.511,
+            "normalized_x": 0.41331002,
+            "normalized_y": 0.42090529,
+            "depth_camera_space_m": 4.74478388
+          }
+        },
+        "top_right": {
+          "world_m": [
+            0.3,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 1204.646,
+            "y": 647.856,
+            "normalized_x": 0.58820617,
+            "normalized_y": 0.42178154,
+            "depth_camera_space_m": 4.64080667
+          }
+        },
+        "bottom_right": {
+          "world_m": [
+            0.3,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 1203.171,
+            "y": 1012.845,
+            "normalized_x": 0.58748567,
+            "normalized_y": 0.65940446,
+            "depth_camera_space_m": 4.6790266
+          }
+        },
+        "bottom_left": {
+          "world_m": [
+            -0.3,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 847.878,
+            "y": 1003.576,
+            "normalized_x": 0.41400275,
+            "normalized_y": 0.65336958,
+            "depth_camera_space_m": 4.78300428
+          }
+        }
+      },
+      "left_pane_corners": {
+        "top_left": {
+          "world_m": [
+            -0.3,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 846.459,
+            "y": 646.511,
+            "normalized_x": 0.41331002,
+            "normalized_y": 0.42090529,
+            "depth_camera_space_m": 4.74478388
+          }
+        },
+        "top_right": {
+          "world_m": [
+            -0.014,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 1015.216,
+            "y": 647.145,
+            "normalized_x": 0.495711,
+            "normalized_y": 0.42131811,
+            "depth_camera_space_m": 4.69522142
+          }
+        },
+        "bottom_right": {
+          "world_m": [
+            -0.014,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 1015.287,
+            "y": 1007.943,
+            "normalized_x": 0.49574563,
+            "normalized_y": 0.65621313,
+            "depth_camera_space_m": 4.73344135
+          }
+        },
+        "bottom_left": {
+          "world_m": [
+            -0.3,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 847.878,
+            "y": 1003.576,
+            "normalized_x": 0.41400275,
+            "normalized_y": 0.65336958,
+            "depth_camera_space_m": 4.78300428
+          }
+        }
+      },
+      "right_pane_corners": {
+        "top_left": {
+          "world_m": [
+            0.014,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 1031.929,
+            "y": 647.207,
+            "normalized_x": 0.5038718,
+            "normalized_y": 0.421359,
+            "depth_camera_space_m": 4.69036913
+          }
+        },
+        "top_right": {
+          "world_m": [
+            0.3,
+            2.4299,
+            1.45
+          ],
+          "pixel": {
+            "x": 1204.646,
+            "y": 647.856,
+            "normalized_x": 0.58820617,
+            "normalized_y": 0.42178154,
+            "depth_camera_space_m": 4.64080667
+          }
+        },
+        "bottom_right": {
+          "world_m": [
+            0.3,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 1203.171,
+            "y": 1012.845,
+            "normalized_x": 0.58748567,
+            "normalized_y": 0.65940446,
+            "depth_camera_space_m": 4.6790266
+          }
+        },
+        "bottom_left": {
+          "world_m": [
+            0.014,
+            2.4299,
+            0.85
+          ],
+          "pixel": {
+            "x": 1031.865,
+            "y": 1008.376,
+            "normalized_x": 0.50384051,
+            "normalized_y": 0.65649474,
+            "depth_camera_space_m": 4.72858906
+          }
+        }
+      }
+    }
+  }
+}

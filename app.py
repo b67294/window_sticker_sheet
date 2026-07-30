@@ -6,6 +6,8 @@ import mimetypes
 import os
 import re
 import shutil
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -42,6 +44,13 @@ import pipeline
 from comfyui_client import comfyui_configured, remove_background
 from generation import DEFAULT_PROMPT, generate_master, generation_configured, render_generation_prompt
 from semantic_grouping import infer_and_apply_semantic_groups, semantic_grouping_configured
+from window_templates import (
+    DEFAULT_WINDOW_TEMPLATE,
+    TEMPLATE_CONSTRAINT_VERSION,
+    aspect_ratio_warning,
+    get_window_template,
+    public_window_templates,
+)
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -129,6 +138,10 @@ def load_jobs() -> None:
             if job.get("status") in {"queued", "running"}:
                 job["status"] = "interrupted"
                 job["error"] = "服务重启中断了上次运行，可从任一步重新运行"
+            settings = job.setdefault("settings", {})
+            if "window_template" not in settings:
+                # In-memory compatibility marker only: do not rewrite historical files.
+                settings["window_template"] = "legacy"
             _jobs[job["id"]] = job
         except Exception:
             continue
@@ -557,11 +570,22 @@ def execute_job(job_id: str, through_stage: str, from_stage: str | None = None) 
         start_index = pipeline.STAGES.index(from_stage) if from_stage else 1
 
         if job["input_mode"] == "source" and through_index >= pipeline.STAGES.index("generate") and start_index <= pipeline.STAGES.index("generate"):
+            if settings.get("window_template") == "legacy":
+                raise RuntimeError("旧版电商原图任务从生图阶段重跑前，必须先选择“单窗”或“双栏窗”模板")
             append_log(job, "调用内部 gpt-image-2 生成强衍生创新白底窗贴母版")
             stage_started = time.perf_counter()
             clear_from(job, "generate")
             source = directory / job["uploads"]["source"]
-            master_path, raw_artifacts, metadata = generate_master(source, directory, job.get("generation_prompt"))
+            base_prompt = job.get("generation_prompt_base") or DEFAULT_PROMPT
+            materialized_prompt = render_generation_prompt(base_prompt, settings)
+            job["generation_prompt_base"] = base_prompt
+            job["generation_prompt"] = materialized_prompt
+            master_path, raw_artifacts, metadata = generate_master(
+                source,
+                directory,
+                materialized_prompt,
+                settings,
+            )
             job["generation"] = metadata
             pipeline.replace_stage_artifacts(job, "generate", [_artifact_from_external("generate", item, directory) for item in raw_artifacts])
             job["current_stage"] = "generate"
@@ -618,8 +642,11 @@ def execute_job(job_id: str, through_stage: str, from_stage: str | None = None) 
                     (directory / "components" / "groups.json").write_text(
                         json.dumps(groups, ensure_ascii=False, indent=2), encoding="utf-8"
                     )
+                    model_note = f"，模型 {semantic_metadata.get('model')}"
+                    if semantic_metadata.get("fallback_used"):
+                        model_note += "（前序模型失败后已使用备用模型）"
                     job.setdefault("logs", []).append(
-                        f"[{datetime.now().strftime('%H:%M:%S')}] 语义分组完成，用时 {time.perf_counter() - semantic_started:.2f}s，应用 {semantic_metadata['applied_count']} 条关系"
+                        f"[{datetime.now().strftime('%H:%M:%S')}] 语义分组完成，用时 {time.perf_counter() - semantic_started:.2f}s，应用 {semantic_metadata['applied_count']} 条关系{model_note}"
                     )
                 except Exception as semantic_error:
                     semantic_metadata = {"status": "failed", "error": str(semantic_error)}
@@ -764,6 +791,11 @@ class SettingsPatch(BaseModel):
     settings: dict[str, Any]
 
 
+class PromptPreviewRequest(BaseModel):
+    generation_prompt_base: str = DEFAULT_PROMPT
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
 class GroupPatch(BaseModel):
     action: Literal["merge", "ungroup", "update", "delete", "restore"]
     group_ids: list[str] = Field(default_factory=list)
@@ -784,16 +816,71 @@ def health() -> dict[str, Any]:
     return {"ok": True, "opencv": cv2.__version__, "shapely": shapely.__version__, "jobs": len(_jobs)}
 
 
+@app.post("/api/restart")
+def restart_service() -> dict[str, Any]:
+    """先应答再退出自身；由分离的辅助进程等端口释放后拉起新服务。"""
+    port = int(os.getenv("LP_APP_PORT", "8790") or 8790)
+    helper = (
+        "import socket, subprocess, sys, time\n"
+        "deadline = time.time() + 30\n"
+        "while time.time() < deadline:\n"
+        "    probe = socket.socket()\n"
+        "    probe.settimeout(1)\n"
+        "    try:\n"
+        f"        probe.connect(('127.0.0.1', {port}))\n"
+        "        probe.close()\n"
+        "        time.sleep(0.5)\n"
+        "    except OSError:\n"
+        "        probe.close()\n"
+        "        break\n"
+        f"subprocess.run([sys.executable, '-m', 'uvicorn', 'app:app', '--host', '127.0.0.1', '--port', '{port}'])\n"
+    )
+
+    def _relaunch() -> None:
+        time.sleep(0.8)  # 等 HTTP 响应发出去再退出进程
+        creationflags = (
+            getattr(subprocess, "DETACHED_PROCESS", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        )
+        with open(APP_DIR / "server.out.log", "ab") as log:
+            subprocess.Popen(
+                [sys.executable, "-c", helper],
+                cwd=str(APP_DIR),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                creationflags=creationflags,
+                close_fds=True,
+            )
+        os._exit(0)
+
+    threading.Thread(target=_relaunch, daemon=True).start()
+    return {"ok": True, "message": "服务正在重启，约 5-15 秒后恢复"}
+
+
 @app.get("/api/defaults")
 def defaults() -> dict[str, Any]:
     settings = pipeline.default_settings()
     return {
         "settings": settings,
-        "generation_prompt": render_generation_prompt(DEFAULT_PROMPT, settings),
+        "generation_prompt": DEFAULT_PROMPT,
+        "generation_prompt_preview": render_generation_prompt(DEFAULT_PROMPT, settings),
+        "window_templates": public_window_templates(),
+        "default_window_template": DEFAULT_WINDOW_TEMPLATE,
+        "template_constraint_version": TEMPLATE_CONSTRAINT_VERSION,
         "generation_configured": generation_configured(),
         "comfyui_configured": comfyui_configured(),
         "semantic_grouping_configured": semantic_grouping_configured(),
     }
+
+
+@app.post("/api/prompts/preview")
+def preview_prompt(request: PromptPreviewRequest) -> dict[str, Any]:
+    try:
+        settings = pipeline.merge_settings(request.settings)
+        return {"prompt": render_generation_prompt(request.generation_prompt_base, settings)}
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/batches")
@@ -850,7 +937,7 @@ async def create_batch(
         uploads.append((file_name, content))
 
     settings = _parse_settings(settings_json)
-    prompt = render_generation_prompt(generation_prompt, settings)
+    prompt = generation_prompt
     batch_id = f"batch-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
     created = now_iso()
     items: list[dict[str, Any]] = []
@@ -1205,6 +1292,24 @@ def _create_job_record(
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail=f"{file_name} 超过 20 MB")
     _validate_upload_bytes(content, input_mode)
+    settings = pipeline.merge_settings(settings)
+    prompt_base = (generation_prompt or DEFAULT_PROMPT).strip()
+    prompt_materialized = (
+        render_generation_prompt(prompt_base, settings)
+        if settings.get("window_template") != "legacy"
+        else prompt_base
+    )
+    ratio_warning = None
+    if input_mode in {"master", "alpha"}:
+        from io import BytesIO
+        from PIL import Image
+
+        with Image.open(BytesIO(content)) as image:
+            ratio_warning = aspect_ratio_warning(
+                image.width,
+                image.height,
+                settings.get("window_template"),
+            )
 
     job_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     directory = job_dir(job_id)
@@ -1224,7 +1329,9 @@ def _create_job_record(
         ),
         "uploads": {input_mode: upload_name},
         "settings": settings,
-        "generation_prompt": render_generation_prompt(generation_prompt, settings),
+        "generation_prompt_base": prompt_base,
+        "generation_prompt": prompt_materialized,
+        "aspect_ratio_warning": ratio_warning,
         "render_pdf": bool(render_pdf),
         "pdf_status": None,
         "pdf_error": None,
@@ -1251,13 +1358,15 @@ def _create_job_record(
                 directory,
             )
         ],
-        "logs": [
-            f"[{datetime.now().strftime('%H:%M:%S')}] 创建任务，输入模式：{input_mode}"
-        ],
+        "logs": [f"[{datetime.now().strftime('%H:%M:%S')}] 创建任务，输入模式：{input_mode}"],
         "error": None,
         "created_at": created,
         "updated_at": created,
     }
+    if ratio_warning:
+        job["logs"].append(
+            f"[{datetime.now().strftime('%H:%M:%S')}] 比例警告：{ratio_warning['message']}"
+        )
     save_job(job)
     return job
 
@@ -1306,7 +1415,19 @@ def update_settings(job_id: str, patch: SettingsPatch) -> dict[str, Any]:
     job = require_job(job_id)
     ensure_job_mutable(job)
     old = pipeline.merge_settings(job.get("settings"))
-    new = pipeline.merge_settings({**old, **patch.settings})
+    incoming = dict(patch.settings)
+    requested_template = incoming.get("window_template", old.get("window_template"))
+    template = get_window_template(requested_template, allow_legacy=True)
+    if requested_template != old.get("window_template") and template["id"] != "legacy":
+        incoming.setdefault("install_width_mm", template["default_mm"][0])
+        incoming.setdefault("install_height_mm", template["default_mm"][1])
+    elif template["id"] != "legacy":
+        ratio = float(template["ratio"][0]) / float(template["ratio"][1])
+        if "install_height_mm" in incoming and "install_width_mm" not in incoming:
+            incoming["install_width_mm"] = float(incoming["install_height_mm"]) * ratio
+        elif "install_width_mm" in incoming and "install_height_mm" not in incoming:
+            incoming["install_height_mm"] = float(incoming["install_width_mm"]) / ratio
+    new = pipeline.merge_settings({**old, **incoming})
     job["settings"] = new
     key_fields: set[str] = set()
     component_fields = {
@@ -1318,7 +1439,13 @@ def update_settings(job_id: str, patch: SettingsPatch) -> dict[str, Any]:
     geometry_fields = {"cut_offset_mm", "spacing_mm", "simplify_mm"}
     changed = {key for key in new if new.get(key) != old.get(key)}
     changed -= {"key_low", "key_high", "morph_kernel"}
-    if changed & key_fields:
+    template_changed = "window_template" in changed
+    if template_changed:
+        base_prompt = job.get("generation_prompt_base") or DEFAULT_PROMPT
+        job["generation_prompt_base"] = base_prompt
+        job["generation_prompt"] = render_generation_prompt(base_prompt, new)
+        clear_from(job, "generate" if job.get("input_mode") == "source" else "components")
+    elif changed & key_fields:
         clear_from(job, "key")
     elif changed & component_fields:
         clear_from(job, "components")
@@ -1326,6 +1453,15 @@ def update_settings(job_id: str, patch: SettingsPatch) -> dict[str, Any]:
         clear_from(job, "geometry")
     elif changed:
         clear_from(job, "layout")
+    if job.get("input_mode") in {"master", "alpha"}:
+        from PIL import Image
+
+        with Image.open(_master_path(job)) as image:
+            job["aspect_ratio_warning"] = aspect_ratio_warning(
+                image.width,
+                image.height,
+                new.get("window_template"),
+            )
     append_log(job, "更新参数：" + ", ".join(sorted(changed)) if changed else "参数未变化")
     return expose_job(job)
 
@@ -1422,6 +1558,8 @@ def select_candidate(job_id: str, candidate_id: str) -> dict[str, Any]:
     candidate = next((item for item in job.get("candidates", []) if item["id"] == candidate_id), None)
     if not candidate:
         raise HTTPException(status_code=404, detail="候选方案不存在")
+    if candidate.get("enabled") is False:
+        raise HTTPException(status_code=400, detail="该候选方案已禁用")
     outputs = pipeline.render_selected_outputs(
         candidate,
         job.get("geometry", []),
