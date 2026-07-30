@@ -298,3 +298,32 @@ def test_geometry_uses_component_bbox_when_contour_bounds_are_smaller(tmp_path):
     asset = np.array(Image.open(tmp_path / geometry[0]["asset_path"]).convert("RGBA"))
     assert asset.shape[:2] == (40, 20)
     assert asset[-1, -1, 3] == 255
+
+
+def test_oversized_group_is_auto_shrunk_to_fit():
+    settings = pipeline.default_settings()
+    printable_w = settings["sheet_width_mm"] - 2 * settings["sheet_margin_mm"]
+    printable_h = settings["sheet_height_mm"] - 2 * settings["sheet_margin_mm"]
+
+    def make_item(group_id, width, height):
+        return {
+            "group_id": group_id,
+            "visible": mapping(box(0, 0, width, height)),
+            "visible_offset_mm": [0.0, 0.0],
+            "asset_size_mm": [float(width), float(height)],
+            "rotatable": False,
+            "filler": False,
+            "max_copies": 0,
+        }
+
+    items = [make_item("g_small", 50, 50), make_item("g_big", 500, 400)]
+    result = pipeline._pack_at_scale(items, settings, "maxrects", 11, 1.0)
+
+    assert set(result["auto_fit_groups"]) == {"g_big"}
+    assert result["auto_fit_groups"]["g_big"] < 1.0
+    placed_ids = {item["group_id"] for item in result["placements"]}
+    assert placed_ids == {"g_small", "g_big"}
+    for placement in result["placements"]:
+        bounds = shape(placement["occupancy"]).bounds
+        assert bounds[2] - bounds[0] <= printable_w + 1e-6
+        assert bounds[3] - bounds[1] <= printable_h + 1e-6

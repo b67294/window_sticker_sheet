@@ -1,0 +1,54 @@
+[
+  {
+    "id": "divider_intrusion",
+    "label": "分隔带被侵入/断裂"
+  },
+  {
+    "id": "real_window",
+    "label": "出现窗框/玻璃/把手/阴影"
+  },
+  {
+    "id": "imbalance",
+    "label": "左右视觉失衡"
+  },
+  {
+    "id": "mechanical_copy",
+    "label": "机械镜像/简单复制"
+  },
+  {
+    "id": "whitespace",
+    "label": "留白不当（过挤/过空）"
+  },
+  {
+    "id": "style_mismatch",
+    "label": "风格不统一"
+  },
+  {
+    "id": "edge_overflow",
+    "label": "元素越界/贴边"
+  },
+  {
+    "id": "theme_wrong",
+    "label": "主题或元素不符"
+  },
+  {
+    "id": "quality",
+    "label": "画质问题（模糊/伪影/乱码）"
+  },
+  {
+    "id": "other",
+    "label": "其他"
+  },
+  {
+    "id": "custom_3e399469",
+    "label": "元素不合适"
+  },
+  {
+    "id": "custom_dc978e81",
+    "label": "窗贴搭配感不强烈"
+  },
+  {
+    "id": "custom_59d4f681",
+    "label": "肢体错误"
+  }
+]

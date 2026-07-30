@@ -1,0 +1,14 @@
+{
+  "id": "rv-20260730-154926-5e9595",
+  "created_at": "2026-07-30T15:49:26+08:00",
+  "job_id": "20260730-151427-2499b5b2",
+  "image": "generate/master.png",
+  "prompt_hash": "29367aa2",
+  "window_template": "double",
+  "defect_types": [
+    "other"
+  ],
+  "severity": "medium",
+  "note": "并没有设计为探头、半身、局部进入 都是完整图像",
+  "status": "open"
+}

@@ -488,3 +488,123 @@ def test_batch_continues_after_failure_and_retry_skips_completed(tmp_path, monke
     webapp.execute_batch(batch["id"])
     assert retry_calls == [jobs[1]["id"]]
     assert webapp._batches[batch["id"]]["status"] == "complete"
+
+
+def test_review_annotation_flow(tmp_path, monkeypatch):
+    monkeypatch.setattr(webapp, "RUNS_DIR", tmp_path)
+    monkeypatch.setattr(webapp, "REVIEWS_DIR", tmp_path / "reviews")
+    webapp._jobs.clear()
+    client = TestClient(webapp.app)
+
+    job_id = "20260730-000000-testjob1"
+    generate_dir = tmp_path / job_id / "generate"
+    generate_dir.mkdir(parents=True)
+    (generate_dir / "master.png").write_bytes(upload_bytes())
+    webapp._jobs[job_id] = {
+        "id": job_id,
+        "status": "complete",
+        "created_at": "2026-07-30T00:00:00",
+        "source_name": "demo.png",
+        "settings": {"window_template": "double"},
+        "generation_prompt_base": "测试 prompt 母本",
+    }
+
+    overview = client.get("/api/review/overview").json()
+    assert overview["jobs"][0]["job_id"] == job_id
+    assert overview["jobs"][0]["prompt_hash"]
+    assert any(item["id"] == "divider_intrusion" for item in overview["defect_types"])
+    assert "double" in overview["template_constraints"]
+
+    response = client.post("/api/review/annotations", json={
+        "job_id": job_id,
+        "defect_types": ["divider_intrusion"],
+        "severity": "high",
+        "note": "分隔带右下被侵入",
+    })
+    assert response.status_code == 200
+    record = response.json()
+    assert record["prompt_hash"] == overview["jobs"][0]["prompt_hash"]
+    snapshot = tmp_path / "reviews" / "prompts" / f"{record['prompt_hash']}.txt"
+    assert snapshot.read_text(encoding="utf-8") == "测试 prompt 母本"
+
+    refreshed = client.get("/api/review/overview").json()
+    assert refreshed["annotation_total"] == 1
+    assert refreshed["jobs"][0]["annotations"][0]["id"] == record["id"]
+
+    assert client.post("/api/review/annotations", json={
+        "job_id": job_id, "defect_types": ["nope"],
+    }).status_code == 400
+    assert client.post("/api/review/annotations", json={
+        "job_id": job_id, "defect_types": [], "note": "",
+    }).status_code == 400
+
+    added = client.post("/api/review/defect-types", json={"label": "自定义类别"})
+    assert added.status_code == 200
+    assert client.post("/api/review/defect-types", json={"label": "自定义类别"}).status_code == 400
+
+    assert client.delete(f"/api/review/annotations/{record['id']}").status_code == 200
+    assert client.get("/api/review/overview").json()["annotation_total"] == 0
+
+
+def test_batch_generate_only_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(webapp, "RUNS_DIR", tmp_path)
+    webapp._jobs.clear()
+    webapp._batches.clear()
+    monkeypatch.setattr(webapp, "generation_configured", lambda: True)
+    # 提示词迭代模式不应要求 ComfyUI 配置。
+    monkeypatch.setattr(webapp, "comfyui_configured", lambda: False)
+
+    class DeferredThread:
+        def __init__(self, target, args=(), daemon=None):
+            self.target = target
+            self.args = args
+        def start(self):
+            pass
+
+    monkeypatch.setattr(webapp.threading, "Thread", DeferredThread)
+    client = TestClient(webapp.app)
+    response = client.post(
+        "/api/batches",
+        data={
+            "settings_json": "{}",
+            "generation_prompt": "prompt",
+            "through_stage": "generate",
+        },
+        files=[
+            ("files", ("a.png", upload_bytes(), "image/png")),
+            ("files", ("b.png", upload_bytes(), "image/png")),
+        ],
+    )
+    assert response.status_code == 200
+    batch = response.json()
+    assert batch["through_stage"] == "generate"
+    assert batch["delivery"]["renderPdf"] is False
+    assert batch["delivery"]["pdfStatus"] == "skipped"
+
+    executed = []
+    monkeypatch.setattr(
+        webapp, "execute_job",
+        lambda job_id, through, from_stage=None: executed.append((job_id, through)) or webapp._jobs[job_id].update({"status": "complete"}),
+    )
+    delivery_calls = []
+    monkeypatch.setattr(webapp, "assemble_delivery", lambda b: delivery_calls.append(b["id"]))
+    webapp.execute_batch(batch["id"])
+    assert all(through == "generate" for _, through in executed)
+    assert len(executed) == 2
+    assert delivery_calls == []
+    assert webapp._batches[batch["id"]]["status"] == "complete"
+
+
+def test_batch_full_mode_requires_comfyui(tmp_path, monkeypatch):
+    monkeypatch.setattr(webapp, "RUNS_DIR", tmp_path)
+    webapp._jobs.clear()
+    webapp._batches.clear()
+    monkeypatch.setattr(webapp, "generation_configured", lambda: True)
+    monkeypatch.setattr(webapp, "comfyui_configured", lambda: False)
+    client = TestClient(webapp.app)
+    response = client.post(
+        "/api/batches",
+        data={"settings_json": "{}", "generation_prompt": "prompt"},
+        files=[("files", ("a.png", upload_bytes(), "image/png"))],
+    )
+    assert response.status_code == 409

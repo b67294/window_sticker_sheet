@@ -1,0 +1,12 @@
+{
+  "id": "rv-20260730-135849-9f0ccf",
+  "created_at": "2026-07-30T13:58:49+08:00",
+  "job_id": "20260730-104948-58485e2d",
+  "image": "generate/master.png",
+  "prompt_hash": "29367aa2",
+  "window_template": "double",
+  "defect_types": [],
+  "severity": "medium",
+  "note": "电商原图为美国主题，创新后变为中国。该窗贴售卖在外国平台，不要出现中国要素。",
+  "status": "open"
+}

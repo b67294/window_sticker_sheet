@@ -44,6 +44,7 @@ function setInputMode(value) {
   $("file").accept = value === "alpha" ? "image/png,image/webp" : "image/png,image/jpeg,image/webp";
   $("file").multiple = value === "source";
   $("batch-pdf-option").hidden = value !== "source";
+  $("batch-generate-only-option").hidden = value !== "source";
   if (value !== "source" && $("file").files.length > 1) {
     $("file").value = "";
     pendingUpload = false;
@@ -287,7 +288,9 @@ function renderBatch(batch) {
   $("log-panel").hidden = true;
   $("batch-view").hidden = false;
   $("job-title").textContent = batch.id;
-  $("job-note").textContent = batch.error || `共 ${batch.total} 张，逐张串行执行；单张失败不会阻塞后续图片。`;
+  $("job-note").textContent = batch.error || (batch.through_stage === "generate"
+    ? `共 ${batch.total} 张 · 提示词迭代模式：只跑到创新生图，结果直接进评图页。`
+    : `共 ${batch.total} 张，逐张串行执行；单张失败不会阻塞后续图片。`);
   const status = $("status");
   status.textContent = batchStatusLabel(batch.status);
   status.className = `status ${batch.status}`;
@@ -476,6 +479,7 @@ function renderCandidates() {
           <div class="metric"><b>${formatPercent(candidate.balance)}</b><small>平衡</small></div>
           <div class="metric"><b>${formatPercent(candidate.score)}</b><small>总分</small></div>
         </div>
+        ${Object.keys(candidate.auto_fit_groups || {}).length ? `<div style="margin:6px 0;padding:6px 9px;border-radius:8px;background:#fdf3e2;color:#8a6116;font-size:12px">超尺寸兜底：${Object.entries(candidate.auto_fit_groups).map(([id, scale]) => `${id} 已单独缩至 ${(scale * 100).toFixed(0)}%`).join("、")}</div>` : ""}
         <button data-candidate-id="${candidate.id}" ${candidate.enabled === false ? "disabled" : ""}>选择此方案</button>
         ${currentJob.selected_candidate === candidate.id && currentJob.final_pdf_url ? `
           <div class="candidate-downloads">
@@ -541,6 +545,7 @@ async function createBatchFromForm() {
   form.append("settings_json", JSON.stringify(collectSettings()));
   form.append("generation_prompt", $("generation-prompt").value);
   form.append("render_pdf", $("render-pdf").checked ? "true" : "false");
+  form.append("through_stage", $("batch-generate-only").checked ? "generate" : "all");
   const batch = await api("/api/batches", { method: "POST", body: form });
   renderBatch(batch);
   return batch;

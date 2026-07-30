@@ -1,0 +1,14 @@
+{
+  "id": "rv-20260730-154901-692856",
+  "created_at": "2026-07-30T15:49:01+08:00",
+  "job_id": "20260730-151427-efd1d45a",
+  "image": "generate/master.png",
+  "prompt_hash": "29367aa2",
+  "window_template": "double",
+  "defect_types": [
+    "custom_dc978e81"
+  ],
+  "severity": "medium",
+  "note": "都近似单个要素 联",
+  "status": "open"
+}

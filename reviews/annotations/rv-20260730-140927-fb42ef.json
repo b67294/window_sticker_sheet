@@ -1,0 +1,14 @@
+{
+  "id": "rv-20260730-140927-fb42ef",
+  "created_at": "2026-07-30T14:09:27+08:00",
+  "job_id": "20260729-110041-de0aecd2",
+  "image": "generate/master.png",
+  "prompt_hash": "b14759eb",
+  "window_template": "legacy",
+  "defect_types": [
+    "custom_dc978e81"
+  ],
+  "severity": "medium",
+  "note": "搭配感不强，生成的元素类似单个元素，",
+  "status": "open"
+}

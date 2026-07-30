@@ -1,0 +1,14 @@
+{
+  "id": "rv-20260730-140735-41f47d",
+  "created_at": "2026-07-30T14:07:35+08:00",
+  "job_id": "20260730-104948-58485e2d",
+  "image": "generate/master.png",
+  "prompt_hash": "29367aa2",
+  "window_template": "double",
+  "defect_types": [
+    "custom_3e399469"
+  ],
+  "severity": "medium",
+  "note": "烟花这类要素由多个细小条状组成一组的要素，在之后做视觉风格的时候不好处理，尽量不要出现这种需要很多组件才组成一组的要素。",
+  "status": "open"
+}

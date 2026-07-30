@@ -1,0 +1,14 @@
+{
+  "id": "rv-20260730-145322-6ac033",
+  "created_at": "2026-07-30T14:53:22+08:00",
+  "job_id": "20260730-143651-9d613fca",
+  "image": "generate/master.png",
+  "prompt_hash": "83df003c",
+  "window_template": "double",
+  "defect_types": [
+    "custom_59d4f681"
+  ],
+  "severity": "medium",
+  "note": "肢体错误（猫头鹰长了蝙蝠的翅膀）",
+  "status": "open"
+}

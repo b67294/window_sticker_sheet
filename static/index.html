@@ -15,6 +15,7 @@
     <div class="top-actions">
       <span id="provider-status" class="provider">检查生图配置…</span>
       <button id="load-jobs" class="ghost">历史任务</button>
+      <a href="/review" class="ghost">评图</a>
       <button id="restart-service" class="ghost">重启服务</button>
     </div>
   </header>
@@ -115,6 +116,11 @@
             <input id="render-pdf" type="checkbox" checked>
             批量完成时生成交付PDF
             <small>默认开启；关闭后可在批次完成后补生成，不会重新生图。</small>
+          </label>
+          <label id="batch-generate-only-option" class="check-row delivery-option" hidden>
+            <input id="batch-generate-only" type="checkbox">
+            只跑到创新生图（提示词迭代模式）
+            <small>批量任务在生图后停止，跳过去背景/组件/排版，省时省钱；图直接进评图页。满意后可从后续阶段续跑。</small>
           </label>
         </section>
 

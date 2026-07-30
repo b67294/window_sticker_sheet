@@ -1139,6 +1139,41 @@ def _balance_score(pages: list[list[PackedItem]], settings: dict[str, Any]) -> f
     return float(np.mean(page_scores)) if page_scores else 0.0
 
 
+def _shrink_source_to_fit(
+    source: dict[str, Any],
+    settings: dict[str, Any],
+    layout_scale: float,
+) -> dict[str, Any] | None:
+    """单件兜底：某组即使独占一页也放不下时，仅把该组缩到可打印区域内。
+
+    cut/spacing 缓冲是固定宽度不随图缩放，所以按去掉缓冲后的净尺寸解线性比例。
+    """
+    printable_w = float(settings["sheet_width_mm"]) - 2 * float(settings["sheet_margin_mm"])
+    printable_h = float(settings["sheet_height_mm"]) - 2 * float(settings["sheet_margin_mm"])
+    buffer_mm = float(settings["cut_offset_mm"]) + float(settings["spacing_mm"]) / 2.0
+    scale = layout_scale
+    for _ in range(6):
+        current = _scaled_layout_source(source, settings, scale)
+        bounds = current["occupancy_bounds_mm"]
+        width = bounds[2] - bounds[0]
+        height = bounds[3] - bounds[1]
+        fits = (width <= printable_w and height <= printable_h) or (
+            current.get("rotatable", False) and width <= printable_h and height <= printable_w
+        )
+        if fits:
+            return current
+        art_w = max(width - 2 * buffer_mm, 1e-6)
+        art_h = max(height - 2 * buffer_mm, 1e-6)
+        factor = min(
+            max(printable_w - 2 * buffer_mm, 1e-6) / art_w,
+            max(printable_h - 2 * buffer_mm, 1e-6) / art_h,
+        ) * 0.99
+        if factor >= 1.0:
+            factor = 0.98
+        scale *= factor
+    return None
+
+
 def _pack_at_scale(
     items: list[dict[str, Any]],
     settings: dict[str, Any],
@@ -1151,14 +1186,22 @@ def _pack_at_scale(
     rng = random.Random(seed + order_variant * 997)
     scaled_items = [_scaled_layout_source(item, settings, layout_scale) for item in items]
     ordered = _sort_items(scaled_items, strategy, rng)
+    originals = {item["group_id"]: item for item in items}
     if strategy == "center_compact":
         placement_strategy = "maxrects"
     else:
         placement_strategy = "hybrid_fast" if strategy == "hybrid_search" and order_variant > 0 else strategy
     pages: list[list[PackedItem]] = []
     oversized: list[str] = []
+    auto_fit_groups: dict[str, float] = {}
     for source in ordered:
         placed = _place_one(source, pages, settings, placement_strategy, rng)
+        if placed is None:
+            fitted = _shrink_source_to_fit(originals[source["group_id"]], settings, layout_scale)
+            if fitted is not None:
+                placed = _place_one(fitted, pages, settings, placement_strategy, rng)
+            if placed is not None:
+                auto_fit_groups[source["group_id"]] = round(float(fitted["layout_scale"]), 4)
         if placed is None:
             oversized.append(source["group_id"])
     if oversized:
@@ -1219,6 +1262,7 @@ def _pack_at_scale(
         "seed": seed,
         "order_variant": order_variant,
         "layout_scale": round(layout_scale, 4),
+        "auto_fit_groups": auto_fit_groups,
         "page_count": len(used_pages),
         "utilization": round(utilization, 6),
         "compactness": round(compactness, 6),
@@ -1392,7 +1436,7 @@ def render_candidate(
     output_dir: Path,
     dpi: int,
     final: bool = False,
-    tile_cache: dict[tuple[str, int, float], Image.Image] | None = None,
+    tile_cache: dict[tuple[str, int, float, float], Image.Image] | None = None,
 ) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     by_id = {item["group_id"]: item for item in geometries}
@@ -1408,7 +1452,13 @@ def render_candidate(
             draw.rectangle((margin_px, margin_px, width_px - margin_px, height_px - margin_px), outline=(45, 94, 110, 150), width=max(1, round(scale * 0.3)))
         for placement in [item for item in candidate["placements"] if item["page"] == page_index]:
             source = by_id[placement["group_id"]]
-            cache_key = (source["group_id"], dpi, float(candidate.get("layout_scale", 1.0)))
+            # 单件兜底缩小后同一组在不同候选中可能尺寸不同，键必须落到实际资产尺寸。
+            cache_key = (
+                source["group_id"],
+                dpi,
+                round(float(placement["asset_size_mm"][0]), 3),
+                round(float(placement["asset_size_mm"][1]), 3),
+            )
             if tile_cache is not None and cache_key in tile_cache:
                 tile = tile_cache[cache_key]
             else:
@@ -1478,7 +1528,7 @@ def run_layout(job: dict[str, Any], job_dir: Path, settings: dict[str, Any]) -> 
         ]
         packed_candidates = [future.result() for future in futures]
 
-    preview_tile_cache: dict[tuple[str, int, float], Image.Image] = {}
+    preview_tile_cache: dict[tuple[str, int, float, float], Image.Image] = {}
     for index, candidate in enumerate(packed_candidates, start=1):
         strategy = strategies[index - 1]
         candidate_id = f"candidate-{index}"
@@ -1601,7 +1651,7 @@ def render_selected_outputs(
     transparent_dir = final_dir / "transparent"
     white_dir = final_dir / "white"
     _remove_stale_selected_outputs(final_dir)
-    output_tile_cache: dict[tuple[str, int, float], Image.Image] = {}
+    output_tile_cache: dict[tuple[str, int, float, float], Image.Image] = {}
     transparent_paths = render_candidate(
         candidate,
         geometries,

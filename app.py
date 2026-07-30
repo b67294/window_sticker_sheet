@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import mimetypes
 import os
@@ -56,6 +57,7 @@ from window_templates import (
 APP_DIR = Path(__file__).resolve().parent
 RUNS_DIR = APP_DIR / "runs"
 STATIC_DIR = APP_DIR / "static"
+REVIEWS_DIR = APP_DIR / "reviews"
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 ALLOWED_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
@@ -749,7 +751,7 @@ def execute_batch(batch_id: str) -> None:
             job["status"] = "queued"
             job["error"] = None
             save_job(job)
-            execute_job(job["id"], "all", from_stage)
+            execute_job(job["id"], batch.get("through_stage", "all"), from_stage)
             completed_job = require_job(job["id"])
             item["status"] = completed_job.get("status")
             item["error"] = completed_job.get("error")
@@ -766,13 +768,14 @@ def execute_batch(batch_id: str) -> None:
         else:
             batch["status"] = "failed"
         batch["current_job_id"] = None
-        try:
-            assemble_delivery(batch)
-        except Exception as delivery_error:
-            delivery = _ensure_delivery_state(batch)
-            delivery["error"] = str(delivery_error)
-            if delivery.get("renderPdf"):
-                delivery["pdfStatus"] = "failed"
+        if batch.get("through_stage", "all") == "all":
+            try:
+                assemble_delivery(batch)
+            except Exception as delivery_error:
+                delivery = _ensure_delivery_state(batch)
+                delivery["error"] = str(delivery_error)
+                if delivery.get("renderPdf"):
+                    delivery["pdfStatus"] = "failed"
         save_batch(batch)
     except Exception as exc:
         batch["status"] = "failed"
@@ -858,6 +861,186 @@ def restart_service() -> dict[str, Any]:
     return {"ok": True, "message": "服务正在重启，约 5-15 秒后恢复"}
 
 
+# ---------------------------------------------------------------------------
+# 评图（人工批注）：批注是长期资产，全部落盘到 reviews/ 并进 git。
+# ---------------------------------------------------------------------------
+
+DEFAULT_DEFECT_TYPES = [
+    {"id": "divider_intrusion", "label": "分隔带被侵入/断裂"},
+    {"id": "real_window", "label": "出现窗框/玻璃/把手/阴影"},
+    {"id": "imbalance", "label": "左右视觉失衡"},
+    {"id": "mechanical_copy", "label": "机械镜像/简单复制"},
+    {"id": "whitespace", "label": "留白不当（过挤/过空）"},
+    {"id": "style_mismatch", "label": "风格不统一"},
+    {"id": "edge_overflow", "label": "元素越界/贴边"},
+    {"id": "theme_wrong", "label": "主题或元素不符"},
+    {"id": "quality", "label": "画质问题（模糊/伪影/乱码）"},
+    {"id": "other", "label": "其他"},
+]
+
+
+def _defect_types_path() -> Path:
+    return REVIEWS_DIR / "defect-types.json"
+
+
+def _load_defect_types() -> list[dict[str, Any]]:
+    path = _defect_types_path()
+    if not path.is_file():
+        REVIEWS_DIR.mkdir(parents=True, exist_ok=True)
+        _save_json_with_unique_temp(path, DEFAULT_DEFECT_TYPES)
+        return list(DEFAULT_DEFECT_TYPES)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _prompt_hash(job: dict[str, Any]) -> str:
+    prompt = (job.get("generation_prompt_base") or job.get("generation_prompt") or "").strip()
+    if not prompt:
+        return ""
+    # 浏览器 textarea 提交的是 CRLF，统一换行符避免同一内容产生两个指纹。
+    normalized = prompt.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:8]
+
+
+def _snapshot_prompt(job: dict[str, Any]) -> None:
+    """按哈希去重保存 prompt 全文，任务目录被清理后批注仍可反查 prompt。"""
+    digest = _prompt_hash(job)
+    if not digest:
+        return
+    prompt_dir = REVIEWS_DIR / "prompts"
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+    target = prompt_dir / f"{digest}.txt"
+    if not target.is_file():
+        prompt = (job.get("generation_prompt_base") or job.get("generation_prompt") or "").strip()
+        target.write_text(prompt, encoding="utf-8")
+
+
+def _load_annotations() -> list[dict[str, Any]]:
+    directory = REVIEWS_DIR / "annotations"
+    if not directory.is_dir():
+        return []
+    records = []
+    for path in directory.glob("*.json"):
+        try:
+            records.append(json.loads(path.read_text(encoding="utf-8")))
+        except Exception:
+            continue
+    records.sort(key=lambda item: item.get("created_at", ""))
+    return records
+
+
+class AnnotationRequest(BaseModel):
+    job_id: str
+    defect_types: list[str] = Field(default_factory=list)
+    severity: Literal["low", "medium", "high"] = "medium"
+    note: str = ""
+
+
+class DefectTypeRequest(BaseModel):
+    label: str
+
+
+@app.get("/review")
+def review_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "review.html")
+
+
+@app.get("/api/review/overview")
+def review_overview(limit: int = 100) -> dict[str, Any]:
+    annotations = _load_annotations()
+    by_job: dict[str, list[dict[str, Any]]] = {}
+    for record in annotations:
+        by_job.setdefault(record.get("job_id", ""), []).append(record)
+    with _lock:
+        jobs = sorted(_jobs.values(), key=lambda item: item.get("created_at", ""), reverse=True)
+    cards = []
+    for job in jobs:
+        master = job_dir(job["id"]) / "generate" / "master.png"
+        if not master.is_file():
+            continue
+        source = next(iter(job_dir(job["id"]).glob("upload-source.*")), None)
+        template = get_window_template(job.get("settings", {}).get("window_template"), allow_legacy=True)
+        cards.append({
+            "job_id": job["id"],
+            "created_at": job.get("created_at"),
+            "source_name": job.get("source_name"),
+            "status": job.get("status"),
+            "window_template": template["id"],
+            "window_template_label": template.get("label", template["id"]),
+            "prompt_hash": _prompt_hash(job),
+            "prompt": (job.get("generation_prompt_base") or job.get("generation_prompt") or ""),
+            "master_url": f"/api/jobs/{job['id']}/files/generate/master.png",
+            "source_url": f"/api/jobs/{job['id']}/files/{source.name}" if source else None,
+            "annotations": by_job.get(job["id"], []),
+        })
+        if len(cards) >= max(1, limit):
+            break
+    constraints = {
+        item["id"]: item.get("prompt_constraint", "")
+        for item in public_window_templates()
+    }
+    return {
+        "defect_types": _load_defect_types(),
+        "jobs": cards,
+        "default_prompt": DEFAULT_PROMPT,
+        "template_constraints": constraints,
+        "annotation_total": len(annotations),
+    }
+
+
+@app.post("/api/review/annotations")
+def create_annotation(request: AnnotationRequest) -> dict[str, Any]:
+    job = require_job(request.job_id)
+    note = request.note.strip()
+    if not note and not request.defect_types:
+        raise HTTPException(status_code=400, detail="缺陷类别和批注内容至少填一项")
+    known_types = {item["id"] for item in _load_defect_types()}
+    unknown = [item for item in request.defect_types if item not in known_types]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"未知缺陷类别: {', '.join(unknown)}")
+    _snapshot_prompt(job)
+    record = {
+        "id": f"rv-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}",
+        "created_at": now_iso(),
+        "job_id": job["id"],
+        "image": "generate/master.png",
+        "prompt_hash": _prompt_hash(job),
+        "window_template": job.get("settings", {}).get("window_template"),
+        "defect_types": list(dict.fromkeys(request.defect_types)),
+        "severity": request.severity,
+        "note": note[:2000],
+        "status": "open",
+    }
+    directory = REVIEWS_DIR / "annotations"
+    directory.mkdir(parents=True, exist_ok=True)
+    _save_json_with_unique_temp(directory / f"{record['id']}.json", record)
+    return record
+
+
+@app.delete("/api/review/annotations/{annotation_id}")
+def delete_annotation(annotation_id: str) -> dict[str, Any]:
+    if not re.fullmatch(r"rv-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}", annotation_id):
+        raise HTTPException(status_code=400, detail="无效的批注 ID")
+    path = REVIEWS_DIR / "annotations" / f"{annotation_id}.json"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="批注不存在")
+    path.unlink()
+    return {"ok": True}
+
+
+@app.post("/api/review/defect-types")
+def add_defect_type(request: DefectTypeRequest) -> dict[str, Any]:
+    label = request.label.strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="类别名称不能为空")
+    types = _load_defect_types()
+    if any(item["label"] == label for item in types):
+        raise HTTPException(status_code=400, detail="同名类别已存在")
+    new_type = {"id": f"custom_{uuid.uuid4().hex[:8]}", "label": label}
+    types.append(new_type)
+    _save_json_with_unique_temp(_defect_types_path(), types)
+    return new_type
+
+
 @app.get("/api/defaults")
 def defaults() -> dict[str, Any]:
     settings = pipeline.default_settings()
@@ -913,12 +1096,13 @@ async def create_batch(
     settings_json: str = Form("{}"),
     generation_prompt: str = Form(DEFAULT_PROMPT),
     render_pdf: bool = Form(True),
+    through_stage: Literal["generate", "all"] = Form("all"),
 ) -> dict[str, Any]:
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传一张电商原图")
     if not generation_configured():
         raise HTTPException(status_code=409, detail="gpt-image-2 尚未配置")
-    if not comfyui_configured():
+    if through_stage == "all" and not comfyui_configured():
         raise HTTPException(status_code=409, detail="ComfyUI 去背景工作流尚未配置")
 
     uploads: list[tuple[str, bytes]] = []
@@ -966,9 +1150,10 @@ async def create_batch(
         "items": items,
         "settings": settings,
         "generation_prompt": prompt,
+        "through_stage": through_stage,
         "delivery": {
-            "renderPdf": render_pdf,
-            "pdfStatus": "pending" if render_pdf else "skipped",
+            "renderPdf": render_pdf and through_stage == "all",
+            "pdfStatus": "pending" if render_pdf and through_stage == "all" else "skipped",
             "generatedAt": None,
             "files": [],
             "error": None,

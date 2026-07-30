@@ -1,0 +1,14 @@
+{
+  "id": "rv-20260730-141017-d7d72c",
+  "created_at": "2026-07-30T14:10:17+08:00",
+  "job_id": "20260729-091604-09f7b2d6",
+  "image": "generate/master.png",
+  "prompt_hash": "f4baa10a",
+  "window_template": "legacy",
+  "defect_types": [
+    "custom_3e399469"
+  ],
+  "severity": "medium",
+  "note": "自由女神像露出的有效面积太少",
+  "status": "open"
+}

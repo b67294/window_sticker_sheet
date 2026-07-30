@@ -1,0 +1,14 @@
+{
+  "id": "rv-20260730-145243-dcda18",
+  "created_at": "2026-07-30T14:52:43+08:00",
+  "job_id": "20260730-143651-9d613fca",
+  "image": "generate/master.png",
+  "prompt_hash": "83df003c",
+  "window_template": "double",
+  "defect_types": [
+    "custom_3e399469"
+  ],
+  "severity": "medium",
+  "note": "元素大小基本都一致 希望能有大小错落的设计会更好看 现在有点呆板了",
+  "status": "open"
+}
