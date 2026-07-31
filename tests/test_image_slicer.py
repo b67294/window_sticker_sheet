@@ -88,8 +88,12 @@ def test_slice_image_writes_combined_pdf(tmp_path):
     result = image_slicer.slice_image(source, tmp_path / "out", 29, 36.5)
     assert result["pdf"] == "tiles.pdf"
     reader = PdfReader(tmp_path / "out" / "tiles.pdf")
-    assert len(reader.pages) == result["plan"]["tile_count"] == 6
-    width_pt = float(reader.pages[0].mediabox.width)
-    height_pt = float(reader.pages[0].mediabox.height)
+    # 第一页是切分示意图，之后每块一页。
+    assert len(reader.pages) == result["plan"]["tile_count"] + 1 == 7
+    overview_width = float(reader.pages[0].mediabox.width)
+    overview_height = float(reader.pages[0].mediabox.height)
+    assert abs(overview_width / overview_height - 870 / 730) < 0.01
+    width_pt = float(reader.pages[1].mediabox.width)
+    height_pt = float(reader.pages[1].mediabox.height)
     # 300 DPI 折算：290px → 69.6pt，365px → 87.6pt，比例应等于 29:36.5。
     assert abs(width_pt / height_pt - 29 / 36.5) < 0.01

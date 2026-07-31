@@ -41,8 +41,12 @@
           <div id="upload-list" class="upload-list" hidden></div>
           <details id="prompt-details" hidden>
             <summary>编辑通用生图 Prompt</summary>
+            <label style="display:block;margin:8px 0 6px">版式
+              <select id="prompt-style" data-setting="prompt_style" data-setting-type="string"></select>
+            </label>
+            <div id="prompt-style-description" class="mode-note"></div>
             <textarea id="generation-prompt" rows="8"></textarea>
-            <p class="mode-note">这里只编辑跨主题通用部分；窗户模板硬约束由系统只读追加。</p>
+            <p class="mode-note">上方选样式会重新填充此文本（基础层+样式层）；窗户模板硬约束由系统只读追加。</p>
             <details class="prompt-preview-details">
               <summary>查看实际完整 Prompt</summary>
               <pre id="generation-prompt-preview" class="prompt-preview"></pre>
@@ -53,12 +57,19 @@
 
         <section class="panel-block">
           <div class="section-title"><span>02</span>物理规格</div>
-          <label>窗户模板
+          <label>窗型预设
             <select id="window-template" data-setting="window_template" data-setting-type="string">
               <option value="double" selected>双栏窗 · 1:1（默认）</option>
-              <option value="single">单窗 · 3:4</option>
             </select>
           </label>
+          <div class="field-grid two">
+            <label>分栏骨架
+              <select id="window-frame" data-setting="frame_id" data-setting-type="string"></select>
+            </label>
+            <label>画布比例
+              <select id="canvas-ratio" data-setting="canvas_id" data-setting-type="string"></select>
+            </label>
+          </div>
           <div id="window-template-description" class="mode-note"></div>
           <div id="window-template-constraint" class="template-constraint"></div>
           <div class="field-grid two">
@@ -69,7 +80,7 @@
           </div>
           <label class="occupancy-field">有效图案占展开范围
             <input data-setting="content_occupancy_ratio" data-setting-transform="percent" type="number" min="50" max="100" step="1">
-            <small>同一尺寸同时表示目标小型窗户玻璃范围和整套窗贴推荐展开范围；默认有效图案约占85%，其余用于自然留白和窗格分隔。</small>
+            <small>仅用于几何阶段的物理尺寸换算（图案内容按此占比映射到安装尺寸），不再写入生图 Prompt；默认约85%。</small>
           </label>
           <div class="field-grid three">
             <label title="纸张四周禁止放置贴纸的安全区域">纸张边缘安全区<input data-setting="sheet_margin_mm" type="number" min="0" step="0.1"></label>

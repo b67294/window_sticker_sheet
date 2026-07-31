@@ -37,11 +37,12 @@ def test_default_prompt_preserves_theme_innovates_and_builds_scene_modules():
     assert "不要一比一复刻" in prompt
     assert "主题表达不变" in prompt
     assert "不要生成彼此无关" in prompt
-    assert "主要模块内部可以合理接触" in prompt
-    assert "不同主要模块之间必须留出" in prompt
+    assert "模块内部可以合理接触" in prompt
+    assert "不同模块之间必须留出" in prompt
     assert "具体画布比例与窗格结构" in prompt
     assert "左右双竖窗" not in prompt
-    assert "元素完整性与边缘互动" in prompt
+    assert "【元素完整性】" in prompt
+    assert "【边缘互动】" in prompt
     assert "探头、半身、局部进入" in prompt
     assert "独立贴纸模块" in prompt
     assert "文字、面部、关键识别特征" in prompt
@@ -49,37 +50,59 @@ def test_default_prompt_preserves_theme_innovates_and_builds_scene_modules():
     assert "#ffffff" in prompt
 
 
-def test_generation_prompt_materializes_one_authoritative_size_constraint():
+def test_prompt_styles_compose_base_plus_style():
+    styles = generation.list_prompt_styles()
+    style_ids = [item["id"] for item in styles]
+    assert style_ids[0] == "scene"
+    assert {"scene", "large_elements", "small_scatter"} <= set(style_ids)
+    assert all(item["label"] for item in styles)
+
+    assert generation.compose_base_prompt() == generation.DEFAULT_PROMPT
+    scene = generation.compose_base_prompt("scene")
+    large = generation.compose_base_prompt("large_elements")
+    scatter = generation.compose_base_prompt("small_scatter")
+    # 基础层在每种样式里都存在。
+    for prompt in (scene, large, scatter):
+        assert "主题表达不变" in prompt
+        assert "#ffffff" in prompt
+    # 场景式专有条款不得泄漏进其他样式。
+    assert "贴好之后的窗户场景" in scene
+    assert "贴好之后的窗户场景" not in large
+    assert "贴好之后的窗户场景" not in scatter
+    # 满铺样式与场景式的图标集合禁令互斥。
+    assert "不要生成彼此无关" not in scatter
+    assert "满铺" in scatter
+    with __import__("pytest").raises(ValueError, match="未知 prompt 版式"):
+        generation.compose_base_prompt("nope")
+
+
+def test_generation_prompt_appends_template_constraint_without_size_block():
     prompt = generation.render_generation_prompt(
         generation.DEFAULT_PROMPT,
-        {
-            "window_template": "single",
-            "install_width_mm": 600,
-            "install_height_mm": 800,
-            "content_occupancy_ratio": 0.85,
-        },
+        {"window_template": "single", "install_width_mm": 600, "install_height_mm": 800},
     )
-
-    assert "600 × 800 mm" in prompt
-    assert "宽高比约为 3:4" in prompt
-    assert "约 85%" in prompt
-    assert "450 × 600 mm" not in prompt
-    assert prompt.count(generation.SIZE_CONSTRAINT_MARKER) == 1
+    assert generation.SIZE_CONSTRAINT_MARKER not in prompt
+    assert prompt.count(generation.TEMPLATE_CONSTRAINT_MARKER) == 1
+    assert "mm" not in prompt.split(generation.TEMPLATE_CONSTRAINT_MARKER)[1]
 
 
-def test_generation_prompt_replaces_stale_materialized_constraint():
-    first = generation.render_generation_prompt(
-        "自定义创新要求",
-        {"window_template": "single", "install_width_mm": 450, "install_height_mm": 600},
+def test_generation_prompt_strips_stale_markers_and_stays_idempotent():
+    # 老任务的 base 里可能残留旧版尺寸段，重渲染必须清掉且幂等。
+    stale_base = (
+        "自定义创新要求\n\n"
+        f"{generation.TEMPLATE_CONSTRAINT_MARKER}：单窗】\n旧模板段\n\n"
+        f"{generation.SIZE_CONSTRAINT_MARKER}\n统一为 450 × 600 mm 的旧尺寸段"
     )
-    second = generation.render_generation_prompt(
-        first,
-        {"window_template": "single", "install_width_mm": 750, "install_height_mm": 1000},
+    rendered = generation.render_generation_prompt(
+        stale_base,
+        {"window_template": "double"},
     )
-
-    assert "450 × 600 mm" not in second
-    assert "750 × 1000 mm" in second
-    assert second.count(generation.SIZE_CONSTRAINT_MARKER) == 1
+    assert rendered.startswith("自定义创新要求")
+    assert "450 × 600 mm" not in rendered
+    assert generation.SIZE_CONSTRAINT_MARKER not in rendered
+    assert rendered.count(generation.TEMPLATE_CONSTRAINT_MARKER) == 1
+    again = generation.render_generation_prompt(rendered, {"window_template": "double"})
+    assert again == rendered
 
 
 def test_auto_generation_size_uses_default_window_ratio(tmp_path, monkeypatch):
@@ -89,6 +112,8 @@ def test_auto_generation_size_uses_default_window_ratio(tmp_path, monkeypatch):
 
     assert generation._choose_generation_size(source) == "1216x1216"
     assert generation._choose_generation_size(source, {"window_template": "single"}) == "1056x1408"
+    assert generation._choose_generation_size(source, {"window_template": "single_portrait"}) == "1168x1392"
+    assert generation._choose_generation_size(source, {"window_template": "single_landscape"}) == "1392x1168"
 
 
 def test_template_prompts_are_mutually_exclusive():
@@ -100,12 +125,34 @@ def test_template_prompts_are_mutually_exclusive():
         "通用创新要求",
         {"window_template": "double", "install_width_mm": 600, "install_height_mm": 600},
     )
-    assert "单窗" in single
+    portrait = generation.render_generation_prompt(
+        "通用创新要求",
+        {"window_template": "single_portrait"},
+    )
+    landscape = generation.render_generation_prompt(
+        "通用创新要求",
+        {"window_template": "single_landscape"},
+    )
+    custom = generation.render_generation_prompt(
+        "通用创新要求",
+        {"window_template": "custom", "frame_id": "pane3", "canvas_id": "1:1"},
+    )
+    assert "宽3:高4的竖版" in single
     assert "禁止生成贯穿全高的中央纯白分隔带" in single
     assert "左右两个竖向内容区" not in single
-    assert "双栏窗" in double
+    assert "2栏 · 中间6%分隔带 × 1:1 方形" in double
     assert "约占画布总宽度6%" in double
     assert "不得跨越或侵入该分隔带" in double
+    assert "宽73:高87" in portrait
+    assert "宽87:高73" in landscape
+    assert "横向延展" in landscape
+    for prompt in (portrait, landscape):
+        assert "禁止生成贯穿全高的中央纯白分隔带" in prompt
+        assert "约占画布总宽度6%" not in prompt
+    # 自定义组合：3栏 × 1:1
+    assert "三个竖向内容区" in custom
+    assert "5%" in custom
+    assert custom.count(generation.TEMPLATE_CONSTRAINT_MARKER) == 1
 
 
 def test_explicit_generation_size_must_match_template(tmp_path, monkeypatch):

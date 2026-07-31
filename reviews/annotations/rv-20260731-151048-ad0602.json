@@ -1,0 +1,14 @@
+{
+  "id": "rv-20260731-151048-ad0602",
+  "created_at": "2026-07-31T15:10:48+08:00",
+  "job_id": "20260731-145622-8096ec2d",
+  "image": "generate/master.png",
+  "prompt_hash": "b2427dfb",
+  "window_template": "single_landscape",
+  "defect_types": [
+    "custom_0bec23b9"
+  ],
+  "severity": "medium",
+  "note": "",
+  "status": "open"
+}

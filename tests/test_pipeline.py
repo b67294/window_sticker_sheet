@@ -31,6 +31,11 @@ def test_template_settings_load_recommended_size_and_lock_ratio():
     assert (resized_from_height["install_width_mm"], resized_from_height["install_height_mm"]) == (600.0, 800.0)
     double = pipeline.merge_settings({"window_template": "double", "install_width_mm": 720})
     assert (double["install_width_mm"], double["install_height_mm"]) == (720.0, 720.0)
+    portrait = pipeline.merge_settings({"window_template": "single_portrait"})
+    assert (portrait["install_width_mm"], portrait["install_height_mm"]) == (730.0, 870.0)
+    landscape = pipeline.merge_settings({"window_template": "single_landscape"})
+    assert (landscape["install_width_mm"], landscape["install_height_mm"]) == (870.0, 730.0)
+    assert landscape["prompt_style"] == "scene"
 
 
 def test_content_scale_ignores_arbitrary_outer_whitespace():

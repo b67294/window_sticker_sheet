@@ -1,0 +1,42 @@
+{
+  "type": "table",
+  "title": "三个可复用模块",
+  "subtitle": "模块边界由真实输入输出文件定义，而不是按页面功能拆分",
+  "width": 1600,
+  "columns": [
+    "模块",
+    "核心职责",
+    "输入",
+    "输出"
+  ],
+  "rows": [
+    [
+      {
+        "text": "A · 模板化母版",
+        "tone": "purple"
+      },
+      "主题创新 + 窗户结构 + 比例约束",
+      "参考图、Prompt、模板、毫米尺寸",
+      "白底母版、实际 Prompt、请求证据"
+    ],
+    [
+      {
+        "text": "B · Alpha 与组件",
+        "tone": "green"
+      },
+      "去背、连通域、距离与语义分组",
+      "白底图或透明 PNG",
+      "foreground、primitives、groups"
+    ],
+    [
+      {
+        "text": "C · 排样与交付",
+        "tone": "amber"
+      },
+      "毫米轮廓、候选排样、生产渲染",
+      "透明组件、组关系、Sheet 规格",
+      "PNG、JPG、PDF、layout.json、ZIP"
+    ]
+  ],
+  "headerTone": "blue"
+}

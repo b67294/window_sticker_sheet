@@ -1,0 +1,32 @@
+{
+  "type": "metric-cards",
+  "title": "窗贴生产链：从参考图到可印刷文件",
+  "subtitle": "代码、任务日志与回归测试共同验证的系统资产",
+  "width": 1500,
+  "items": [
+    {
+      "label": "输入入口",
+      "value": "3",
+      "detail": "原图 / 白底 / 透明 PNG",
+      "tone": "blue"
+    },
+    {
+      "label": "核心阶段",
+      "value": "6",
+      "detail": "按依赖失效，可分段重跑",
+      "tone": "purple"
+    },
+    {
+      "label": "排版候选",
+      "value": "4",
+      "detail": "并行计算，可人工改选",
+      "tone": "amber"
+    },
+    {
+      "label": "回归测试",
+      "value": "47",
+      "detail": "2026-07-31 全部通过",
+      "tone": "green"
+    }
+  ]
+}

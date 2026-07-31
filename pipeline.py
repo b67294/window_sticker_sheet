@@ -20,7 +20,7 @@ from shapely import affinity, make_valid
 from shapely.geometry import GeometryCollection, Polygon, box, mapping, shape
 from shapely.ops import unary_union
 
-from window_templates import DEFAULT_WINDOW_TEMPLATE, get_window_template, pane_layout
+from window_templates import DEFAULT_WINDOW_TEMPLATE, pane_layout, resolve_window_spec
 
 
 STAGES = ["input", "generate", "key", "components", "geometry", "layout"]
@@ -29,6 +29,9 @@ STAGES = ["input", "generate", "key", "components", "geometry", "layout"]
 def default_settings() -> dict[str, Any]:
     return {
         "window_template": DEFAULT_WINDOW_TEMPLATE,
+        "frame_id": "pane2",
+        "canvas_id": "1:1",
+        "prompt_style": "scene",
         "install_width_mm": 600.0,
         "install_height_mm": 600.0,
         "content_occupancy_ratio": 0.85,
@@ -78,25 +81,34 @@ def merge_settings(settings: dict[str, Any] | None) -> dict[str, Any]:
         1.0,
         max(0.5, float(merged.get("content_occupancy_ratio", 0.85))),
     )
-    template = get_window_template(merged.get("window_template"), allow_legacy=True)
-    merged["window_template"] = template["id"]
-    if template["id"] != "legacy":
-        ratio = float(template["ratio"][0]) / float(template["ratio"][1])
+    # 画布规格三轴解析：只换预设时清掉旧的 frame/canvas，让预设生效；
+    # 直接改 frame/canvas 时预设自动重算（可能落为 custom）。
+    spec_keys_incoming = {"window_template", "frame_id", "canvas_id"} & set(incoming)
+    if "window_template" in incoming and not ({"frame_id", "canvas_id"} & set(incoming)):
+        merged.pop("frame_id", None)
+        merged.pop("canvas_id", None)
+    spec = resolve_window_spec(merged, allow_legacy=True)
+    merged["window_template"] = spec["id"]
+    merged["frame_id"] = spec.get("frame_id")
+    merged["canvas_id"] = spec.get("canvas_id")
+    if spec["id"] != "legacy":
+        ratio = float(spec["ratio"][0]) / float(spec["ratio"][1])
         has_width = "install_width_mm" in incoming
         has_height = "install_height_mm" in incoming
-        if "window_template" in incoming and not has_width and not has_height:
-            width, height = map(float, template["default_mm"])
+        if spec_keys_incoming and not has_width and not has_height:
+            width, height = map(float, spec["default_mm"])
         elif has_height and not has_width:
             height = max(10.0, float(incoming["install_height_mm"]))
             width = height * ratio
         else:
-            width = max(10.0, float(merged.get("install_width_mm", template["default_mm"][0])))
-            height = max(10.0, float(merged.get("install_height_mm", template["default_mm"][1])))
+            width = max(10.0, float(merged.get("install_width_mm", spec["default_mm"][0])))
+            height = max(10.0, float(merged.get("install_height_mm", spec["default_mm"][1])))
         if abs((width / height) / ratio - 1.0) > 0.001:
             height = width / ratio
         merged["install_width_mm"] = width
         merged["install_height_mm"] = height
     merged["layout_mode"] = "tidy_compact"
+    merged["prompt_style"] = str(merged.get("prompt_style") or "scene").strip() or "scene"
     return merged
 
 
@@ -645,7 +657,7 @@ def run_geometry(job: dict[str, Any], job_dir: Path, settings: dict[str, Any]) -
     scale_metadata = {
         "window_template": settings.get("window_template", "legacy"),
         "pane_layout": pane_layout(
-            settings.get("window_template", "legacy"),
+            settings,
             float(settings["install_width_mm"]),
             float(settings["install_height_mm"]),
         ),
@@ -1687,7 +1699,7 @@ def render_selected_outputs(
         "delivery_render_version": 2,
         "window_template": settings.get("window_template", "legacy"),
         "pane_layout": pane_layout(
-            settings.get("window_template", "legacy"),
+            settings,
             float(settings["install_width_mm"]),
             float(settings["install_height_mm"]),
         ),

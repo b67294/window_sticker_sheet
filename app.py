@@ -44,14 +44,23 @@ _load_local_env(Path(__file__).resolve().with_name(".env"))
 import image_slicer
 import pipeline
 from comfyui_client import comfyui_configured, remove_background
-from generation import DEFAULT_PROMPT, generate_master, generation_configured, render_generation_prompt
+from generation import (
+    DEFAULT_PROMPT,
+    compose_base_prompt,
+    generate_master,
+    generation_configured,
+    list_prompt_styles,
+    render_generation_prompt,
+)
 from semantic_grouping import infer_and_apply_semantic_groups, semantic_grouping_configured
 from window_templates import (
     DEFAULT_WINDOW_TEMPLATE,
     TEMPLATE_CONSTRAINT_VERSION,
     aspect_ratio_warning,
-    get_window_template,
+    public_canvas_ratios,
+    public_window_frames,
     public_window_templates,
+    resolve_window_spec,
 )
 
 
@@ -959,7 +968,7 @@ def review_overview(limit: int = 100) -> dict[str, Any]:
         if not master.is_file():
             continue
         source = next(iter(job_dir(job["id"]).glob("upload-source.*")), None)
-        template = get_window_template(job.get("settings", {}).get("window_template"), allow_legacy=True)
+        template = resolve_window_spec(job.get("settings", {}), allow_legacy=True)
         cards.append({
             "job_id": job["id"],
             "created_at": job.get("created_at"),
@@ -967,6 +976,7 @@ def review_overview(limit: int = 100) -> dict[str, Any]:
             "status": job.get("status"),
             "window_template": template["id"],
             "window_template_label": template.get("label", template["id"]),
+            "prompt_style": job.get("settings", {}).get("prompt_style"),
             "prompt_hash": _prompt_hash(job),
             "prompt": (job.get("generation_prompt_base") or job.get("generation_prompt") or ""),
             "master_url": f"/api/jobs/{job['id']}/files/generate/master.png",
@@ -1240,9 +1250,16 @@ def defaults() -> dict[str, Any]:
     settings = pipeline.default_settings()
     return {
         "settings": settings,
-        "generation_prompt": DEFAULT_PROMPT,
-        "generation_prompt_preview": render_generation_prompt(DEFAULT_PROMPT, settings),
+        "generation_prompt": compose_base_prompt(),
+        "generation_prompt_preview": render_generation_prompt(compose_base_prompt(), settings),
+        "prompt_styles": [
+            {**style, "text": compose_base_prompt(style["id"])}
+            for style in list_prompt_styles()
+        ],
+        "default_prompt_style": settings.get("prompt_style", "scene"),
         "window_templates": public_window_templates(),
+        "window_frames": public_window_frames(),
+        "canvas_ratios": public_canvas_ratios(),
         "default_window_template": DEFAULT_WINDOW_TEMPLATE,
         "template_constraint_version": TEMPLATE_CONSTRAINT_VERSION,
         "generation_configured": generation_configured(),
@@ -1687,7 +1704,7 @@ def _create_job_record(
             ratio_warning = aspect_ratio_warning(
                 image.width,
                 image.height,
-                settings.get("window_template"),
+                settings,
             )
 
     job_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
@@ -1795,17 +1812,30 @@ def update_settings(job_id: str, patch: SettingsPatch) -> dict[str, Any]:
     ensure_job_mutable(job)
     old = pipeline.merge_settings(job.get("settings"))
     incoming = dict(patch.settings)
-    requested_template = incoming.get("window_template", old.get("window_template"))
-    template = get_window_template(requested_template, allow_legacy=True)
-    if requested_template != old.get("window_template") and template["id"] != "legacy":
-        incoming.setdefault("install_width_mm", template["default_mm"][0])
-        incoming.setdefault("install_height_mm", template["default_mm"][1])
-    elif template["id"] != "legacy":
-        ratio = float(template["ratio"][0]) / float(template["ratio"][1])
-        if "install_height_mm" in incoming and "install_width_mm" not in incoming:
-            incoming["install_width_mm"] = float(incoming["install_height_mm"]) * ratio
-        elif "install_width_mm" in incoming and "install_height_mm" not in incoming:
-            incoming["install_height_mm"] = float(incoming["install_width_mm"]) / ratio
+    spec_keys = {"window_template", "frame_id", "canvas_id"}
+    if spec_keys & set(incoming):
+        probe = {key: old.get(key) for key in spec_keys}
+        probe.update({key: incoming[key] for key in spec_keys & set(incoming)})
+        if "window_template" in incoming and not ({"frame_id", "canvas_id"} & set(incoming)):
+            probe.pop("frame_id", None)
+            probe.pop("canvas_id", None)
+        spec = resolve_window_spec(probe, allow_legacy=True)
+        spec_changed = (spec.get("frame_id"), spec.get("canvas_id")) != (
+            old.get("frame_id"), old.get("canvas_id")
+        )
+        if spec_changed and spec["id"] != "legacy":
+            incoming.setdefault("frame_id", spec["frame_id"])
+            incoming.setdefault("canvas_id", spec["canvas_id"])
+            incoming.setdefault("install_width_mm", spec["default_mm"][0])
+            incoming.setdefault("install_height_mm", spec["default_mm"][1])
+    else:
+        spec = resolve_window_spec(old, allow_legacy=True)
+        if spec["id"] != "legacy":
+            ratio = float(spec["ratio"][0]) / float(spec["ratio"][1])
+            if "install_height_mm" in incoming and "install_width_mm" not in incoming:
+                incoming["install_width_mm"] = float(incoming["install_height_mm"]) * ratio
+            elif "install_width_mm" in incoming and "install_height_mm" not in incoming:
+                incoming["install_height_mm"] = float(incoming["install_width_mm"]) / ratio
     new = pipeline.merge_settings({**old, **incoming})
     job["settings"] = new
     key_fields: set[str] = set()
@@ -1818,7 +1848,7 @@ def update_settings(job_id: str, patch: SettingsPatch) -> dict[str, Any]:
     geometry_fields = {"cut_offset_mm", "spacing_mm", "simplify_mm"}
     changed = {key for key in new if new.get(key) != old.get(key)}
     changed -= {"key_low", "key_high", "morph_kernel"}
-    template_changed = "window_template" in changed
+    template_changed = bool({"window_template", "frame_id", "canvas_id"} & changed)
     if template_changed:
         base_prompt = job.get("generation_prompt_base") or DEFAULT_PROMPT
         job["generation_prompt_base"] = base_prompt
@@ -1839,7 +1869,7 @@ def update_settings(job_id: str, patch: SettingsPatch) -> dict[str, Any]:
             job["aspect_ratio_warning"] = aspect_ratio_warning(
                 image.width,
                 image.height,
-                new.get("window_template"),
+                new,
             )
     append_log(job, "更新参数：" + ", ".join(sorted(changed)) if changed else "参数未变化")
     return expose_job(job)

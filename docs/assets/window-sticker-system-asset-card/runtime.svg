@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="450" viewBox="0 0 1500 450" role="img" aria-labelledby="title desc">
+<title id="title">一次真实完整任务的耗时构成</title>
+<desc id="desc">Designed technical information graphic</desc>
+<defs>
+<filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+<feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#18212F" flood-opacity=".08"/>
+</filter>
+<pattern id="dot-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+<circle cx="2" cy="2" r="1.1" fill="#DDE5EF"/>
+</pattern>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#A7B4C2"/>
+</marker>
+<marker id="arrow-red" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#C85454"/>
+</marker>
+</defs>
+<rect x="0.0" y="0.0" width="1500.0" height="450.0" rx="0.0" fill="#F8FAFC" stroke="none" stroke-width="1.5"/>
+<text x="58.0" y="62.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="34.0" font-weight="600" fill="#172033" text-anchor="start"><tspan x="58.0" dy="0.0">一次真实完整任务的耗时构成</tspan></text>
+<text x="58.0" y="100.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="17.0" font-weight="400" fill="#667085" text-anchor="start"><tspan x="58.0" dy="0.0">任务 20260730-143651-9d613fca；有效处理合计 403.44 秒</tspan></text>
+<text x="58.0" y="227.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="21.0" font-weight="600" fill="#172033" text-anchor="start">完整链路</text>
+<text x="58.0" y="258.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="15.0" font-weight="400" fill="#667085" text-anchor="start"><tspan x="58.0" dy="0.0">14 primitives / 10 groups / 4</tspan><tspan x="58.0" dy="21.8">sheets</tspan></text>
+<rect x="308.0" y="190.0" width="481.5" height="98.0" rx="10.0" fill="#8A63B8" stroke="none" stroke-width="1.5"/>
+<text x="548.7" y="231.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="18.0" font-weight="600" fill="#FFFFFF" text-anchor="middle"><tspan x="548.7" dy="0.0">生图 171.3</tspan></text>
+<text x="548.7" y="262.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="15.0" font-weight="500" fill="#F8FAFC" text-anchor="middle">42.5%</text>
+<rect x="789.5" y="190.0" width="465.9" height="98.0" rx="0.0" fill="#3F78C5" stroke="none" stroke-width="1.5"/>
+<text x="1022.4" y="231.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="18.0" font-weight="600" fill="#FFFFFF" text-anchor="middle"><tspan x="1022.4" dy="0.0">ComfyUI 165.74</tspan></text>
+<text x="1022.4" y="262.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="15.0" font-weight="500" fill="#F8FAFC" text-anchor="middle">41.1%</text>
+<rect x="1255.4" y="190.0" width="186.6" height="98.0" rx="10.0" fill="#2E8B57" stroke="none" stroke-width="1.5"/>
+<text x="1348.7" y="231.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="18.0" font-weight="600" fill="#FFFFFF" text-anchor="middle"><tspan x="1348.7" dy="0.0">本地分析与排版 66.4</tspan></text>
+<text x="1348.7" y="262.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="15.0" font-weight="500" fill="#F8FAFC" text-anchor="middle">16.5%</text>
+<rect x="58.0" y="340.0" width="1384.0" height="72.0" rx="16.0" fill="#E9EFF7" stroke="none" stroke-width="1.5"/>
+<text x="82.0" y="383.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="16.0" font-weight="500" fill="#334155" text-anchor="start"><tspan x="82.0" dy="0.0">生图与去背合计占 83.5%；吞吐瓶颈首先在远端服务。</tspan></text>
+</svg>

@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="497" viewBox="0 0 1700 497" role="img" aria-labelledby="title desc">
+<title id="title">三种真实失败，以及系统如何兜底</title>
+<desc id="desc">Designed technical information graphic</desc>
+<defs>
+<filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+<feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#18212F" flood-opacity=".08"/>
+</filter>
+<pattern id="dot-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+<circle cx="2" cy="2" r="1.1" fill="#DDE5EF"/>
+</pattern>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#A7B4C2"/>
+</marker>
+<marker id="arrow-red" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#C85454"/>
+</marker>
+</defs>
+<rect x="0.0" y="0.0" width="1700.0" height="497.0" rx="0.0" fill="#F8FAFC" stroke="none" stroke-width="1.5"/>
+<rect x="0.0" y="0.0" width="1700.0" height="497.0" rx="0.0" fill="url(#dot-grid)" stroke="none" stroke-width="1.5"/>
+<text x="58.0" y="62.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="34.0" font-weight="600" fill="#172033" text-anchor="start"><tspan x="58.0" dy="0.0">三种真实失败，以及系统如何兜底</tspan></text>
+<text x="58.0" y="100.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="17.0" font-weight="400" fill="#667085" text-anchor="start"><tspan x="58.0" dy="0.0">绿色是自动降级；黄色表示产物保留，但仍需恢复或人工操作</tspan></text>
+<g filter="url(#shadow)"><rect x="58.0" y="165.0" width="1584.0" height="282.0" rx="14.0" fill="#FFFFFF" stroke="#D7E0EA" stroke-width="1.0"/></g>
+<rect x="58.0" y="165.0" width="1584.0" height="66.0" rx="14.0" fill="#F3F6FA" stroke="none" stroke-width="1.5"/>
+<rect x="58.0" y="217.0" width="1584.0" height="14.0" rx="0.0" fill="#F3F6FA" stroke="none" stroke-width="1.5"/>
+<rect x="58.0" y="165.0" width="1584.0" height="6.0" rx="3.0" fill="#C85454" stroke="none" stroke-width="1.5"/>
+<text x="76.0" y="203.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="15.0" font-weight="650" fill="#172033" text-anchor="start"><tspan x="76.0" dy="0.0">失败证据</tspan></text>
+<text x="472.0" y="203.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="15.0" font-weight="650" fill="#172033" text-anchor="start"><tspan x="472.0" dy="0.0">直接影响</tspan></text>
+<text x="868.0" y="203.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="15.0" font-weight="650" fill="#172033" text-anchor="start"><tspan x="868.0" dy="0.0">兜底路径</tspan></text>
+<text x="1264.0" y="203.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="15.0" font-weight="650" fill="#172033" text-anchor="start"><tspan x="1264.0" dy="0.0">状态</tspan></text>
+<rect x="58.0" y="231.0" width="1584.0" height="72.0" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="1.5"/>
+<line x1="58.0" y1="231.0" x2="1642.0" y2="231.0" stroke="#D7E0EA" stroke-width="1.0" stroke-linecap="round"/>
+<text x="76.0" y="266.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="14.0" font-weight="600" fill="#172033" text-anchor="start"><tspan x="76.0" dy="0.0">ComfyUI /prompt HTTP 502</tspan></text>
+<text x="472.0" y="266.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="14.0" font-weight="400" fill="#475467" text-anchor="start"><tspan x="472.0" dy="0.0">任务停在去背景阶段</tspan></text>
+<text x="868.0" y="266.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="14.0" font-weight="400" fill="#475467" text-anchor="start"><tspan x="868.0" dy="0.0">从 key 重跑；或透明 PNG 直通</tspan></text>
+<rect x="1262.0" y="251.0" width="74.0" height="32.0" rx="10.0" fill="#FFF3D5" stroke="none" stroke-width="1.5"/>
+<text x="1299.0" y="272.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="13.0" font-weight="600" fill="#D49A18" text-anchor="middle"><tspan x="1299.0" dy="0.0">可恢复</tspan></text>
+<rect x="58.0" y="303.0" width="1584.0" height="72.0" rx="0.0" fill="#F8FAFC" stroke="none" stroke-width="1.5"/>
+<line x1="58.0" y1="303.0" x2="1642.0" y2="303.0" stroke="#D7E0EA" stroke-width="1.0" stroke-linecap="round"/>
+<text x="76.0" y="338.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="14.0" font-weight="600" fill="#172033" text-anchor="start"><tspan x="76.0" dy="0.0">语义接口 502 / 超时 / 10054</tspan></text>
+<text x="472.0" y="338.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="14.0" font-weight="400" fill="#475467" text-anchor="start"><tspan x="472.0" dy="0.0">无法识别跨连通域业务关系</tspan></text>
+<text x="868.0" y="338.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="14.0" font-weight="400" fill="#475467" text-anchor="start"><tspan x="868.0" dy="0.0">WebP + 模型链；全失败保留距离组</tspan></text>
+<rect x="1262.0" y="323.0" width="82.0" height="32.0" rx="10.0" fill="#E5F5EA" stroke="none" stroke-width="1.5"/>
+<text x="1303.0" y="344.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="13.0" font-weight="600" fill="#2E8B57" text-anchor="middle"><tspan x="1303.0" dy="0.0">自动降级</tspan></text>
+<rect x="58.0" y="375.0" width="1584.0" height="72.0" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="1.5"/>
+<line x1="58.0" y1="375.0" x2="1642.0" y2="375.0" stroke="#D7E0EA" stroke-width="1.0" stroke-linecap="round"/>
+<text x="76.0" y="410.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="14.0" font-weight="600" fill="#172033" text-anchor="start"><tspan x="76.0" dy="0.0">group 大于 Sheet 可打印区</tspan></text>
+<text x="472.0" y="410.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="14.0" font-weight="400" fill="#475467" text-anchor="start"><tspan x="472.0" dy="0.0">候选排版无法放入该组</tspan></text>
+<text x="868.0" y="410.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="14.0" font-weight="400" fill="#475467" text-anchor="start"><tspan x="868.0" dy="0.0">单组自动缩小；仍失败则取消分组</tspan></text>
+<rect x="1262.0" y="395.0" width="98.6" height="32.0" rx="10.0" fill="#FFF3D5" stroke="none" stroke-width="1.5"/>
+<text x="1311.3" y="416.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="13.0" font-weight="600" fill="#D49A18" text-anchor="middle"><tspan x="1311.3" dy="0.0">自动 + 人工</tspan></text>
+</svg>

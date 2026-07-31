@@ -5,8 +5,8 @@ import binascii
 import json
 import os
 import re
+import time
 import uuid
-from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +15,7 @@ from PIL import Image
 
 from window_templates import (
     TEMPLATE_CONSTRAINT_VERSION,
-    expected_aspect_ratio,
-    get_window_template,
+    resolve_window_spec,
 )
 
 LEGACY_DOUBLE_PROMPT = """参考输入的电商原图，为其中的窗贴设计创作同系列但差异明显的全新款式，并输出为干净的正视平面白底母版。本提示适用于任意节日、季节、人物、动物、植物、文字或装饰主题，不要擅自套用固定主题。
@@ -53,31 +52,69 @@ LEGACY_DOUBLE_PROMPT = """参考输入的电商原图，为其中的窗贴设计
 删除窗框、玻璃、墙面、户外背景、包装、商品场景、透视、反光和摄影阴影，但保留窗贴图案之间原本有价值的场景搭配关系。
 只输出一张正视二维平面的双竖窗窗贴场景模块母版，不要输出商品效果图、展示样机、规则图标网格或无关联素材清单。最终输出前再次检查：画布四周必须全部为连续可见的纯白安全边距，不能有任何贴纸模块的像素接触或穿出画布边缘；允许模块内部采用具有明确场景意图、自然收口的半身或局部角色造型。"""
 
-DEFAULT_PROMPT = """参考输入的电商原图，为其中的窗贴设计创作同系列但差异明显的全新款式，并输出为干净的正视平面白底母版。本提示适用于任意节日、季节、人物、动物、植物、文字或装饰主题，不要擅自套用固定主题。
+# ---------------------------------------------------------------------------
+# Prompt 分层组装（六层模型的文字部分）：
+#   prompts/core/base.md                              通用底线（全品类）
+#   prompts/products/<product>/constraints.md          产品约束
+#   prompts/products/<product>/layouts/<id>.md         版式（产品内可选）
+# 分栏骨架与画布规格由 window_templates 在渲染时追加；内容简报现由参考图隐式携带。
+# 每次组装现读文件（热加载），改文件不需要重启服务。
+# ---------------------------------------------------------------------------
 
-【最高优先级：主题表达不变】
-先理解原设计正在表达的主题、情绪氛围、目标人群、核心主体、关键象征、故事关系和使用场景。创新前后必须表达同一个主题和用途，不得替换成其他节日、季节、故事或人群，不得删除决定主题识别的核心信息。
-同时必须保持原图的目标市场与文化语境：本产品面向海外市场，不得引入原图中不存在的其他文化体系元素（如中式灯笼、舞狮、汉字、中国结等）。
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+DEFAULT_PRODUCT = "window_sticker"
+DEFAULT_PROMPT_STYLE = "scene"
+_PROMPT_STYLE_ORDER = ["scene", "large_elements", "small_scatter"]
 
-【创新与场景化】
-不要一比一复刻，也不要只做换色、镜像、缩放或简单重排。在不改变主题表达的前提下，重新设计主体造型、动作姿态、道具组合、辅助元素、次级配色、装饰细节、组合方式和画面叙事，其中至少四项明显变化。
-不要生成彼此无关、尺寸相近、规则排列的图标集合。分析原图的安装构图、视觉锚点、大小层级、方向关系、重复节奏、主体与装饰的依附关系及留白，形成一套可以整体安装在窗户上的完整装饰方案。主要组合与填充元素应相互呼应；若原图已有场景构图，保留其场景功能和区域关系并创新具体内容。
-整幅母版必须读作"贴好之后的窗户场景"，每个元素的位置要符合真实窗户上的物理与场景逻辑：具有地面属性的主体（车辆、人物、地精、花草丛）立于画面底部形成地面线；悬挂属性的元素（帘幔、彩旗、吊饰、气球束）从顶部垂下或向上飘起；枝条藤蔓可从左右两侧探入；太阳、云朵、飞鸟、蝴蝶等悬浮元素占据中上部空域。元素之间要有位置呼应（如鸟落枝头、蜜蜂绕花、人物手持道具），不要把元素随机撒在画布上。
-整套设计必须有明显的大小层级：一至两个大型主视觉模块、若干中型次级组合、少量小型点缀，三档尺寸差距要显著；禁止所有元素尺寸相近、地位均等地铺满画面，那样呆板且没有视觉焦点。
 
-【可生产的模块化】
-依据输入内容自适应组织为少量主要场景组合模块，加上必要的独立填充元素，不固定模块数量。主要模块内部可以合理接触、连接或遮叠，以保持语义和搭配关系；不同主要模块之间必须留出清晰、足够的纯白间隔，便于后续识别和拆分。
-避免由大量细小分离部件构成的要素（烟花散点、碎屑群、星点雨、彩带雨）；每个贴纸模块应轮廓连贯、实心面积充足，便于切割和后续加工。探头、半身式模块必须保证主体可见面积足够大，不做只露一小角的设计。
+def _parse_style_file(path: Path) -> dict[str, str]:
+    """样式文件格式：首行 `# 名称`，第二行可选 `> 一句话描述`，其余为 prompt 正文。"""
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
+    label = path.stem
+    description = ""
+    body_start = 0
+    if lines and lines[0].startswith("# "):
+        label = lines[0][2:].strip()
+        body_start = 1
+    if len(lines) > body_start and lines[body_start].startswith("> "):
+        description = lines[body_start][2:].strip()
+        body_start += 1
+    body = "\n".join(lines[body_start:]).strip()
+    return {"id": path.stem, "label": label, "description": description, "text": body}
 
-【元素完整性与边缘互动】
-禁止因画布空间不足造成意外裁切、随机截断或越界。文字、面部、关键识别特征和主体轮廓不得被无意义切断；放不下的普通元素应缩小、移动或省略。
-角色与动物的身体结构必须正确：翅膀、四肢、耳角、尾巴只能属于该物种自身，数量与位置合理，禁止张冠李戴（如给猫头鹰装上蝙蝠翅膀）、多肢或缺肢。
-每张母版必须主动设计一至两个与窗户边缘互动的模块：做成探头、半身、局部进入或从边缘升起的构图（如动物从底边探头张望、枝条从侧边伸入、帘幔从顶边垂下），不要把所有模块都画成悬浮在画面中的完整全身图案。边缘互动模块必须作为轮廓自然收口、语义完整的独立贴纸模块，且露出的主体部分要占足够大的可见面积；生产母版中应完整展示该模块本身并在其四周保留纯白间隔，不依靠母版画布边缘真实裁切。
 
-【文字、版权与输出】
-只有在能够逐字准确保留时才使用原图中承担主题表达的文字；无法可靠识别时不要生成文字。不得新增品牌、Logo、水印、受保护IP角色或无关文字。
-背景必须完全均匀纯白（#ffffff），不得有渐变、纹理、光照变化或阴影；图案边缘清晰，不得有白色描边或光晕。删除窗框、玻璃、墙面、户外背景、包装、商品场景、透视、反光和摄影阴影，但保留有价值的场景搭配关系。
-只输出一张正视二维平面的窗贴场景模块母版，不输出商品效果图、展示样机、规则图标网格或无关联素材清单。画布四周必须保留连续可见的纯白安全边距，任何贴纸模块均不得接触或穿出画布边缘。具体画布比例与窗格结构必须严格服从后续追加的“当前窗户模板硬约束”。"""
+def list_prompt_styles(product: str = DEFAULT_PRODUCT) -> list[dict[str, str]]:
+    layouts_dir = PROMPTS_DIR / "products" / product / "layouts"
+    if not layouts_dir.is_dir():
+        raise RuntimeError(f"缺少版式目录 {layouts_dir}")
+    styles = {path.stem: _parse_style_file(path) for path in layouts_dir.glob("*.md")}
+    if not styles:
+        raise RuntimeError(f"{layouts_dir} 里没有任何版式文件")
+    ordered = [styles[key] for key in _PROMPT_STYLE_ORDER if key in styles]
+    ordered.extend(styles[key] for key in sorted(styles) if key not in _PROMPT_STYLE_ORDER)
+    return ordered
+
+
+def compose_base_prompt(style_id: str = DEFAULT_PROMPT_STYLE, product: str = DEFAULT_PRODUCT) -> str:
+    """通用底线 + 产品约束 + 指定版式，构成用户可编辑的通用 prompt。"""
+    core_path = PROMPTS_DIR / "core" / "base.md"
+    if not core_path.is_file():
+        raise RuntimeError(f"缺少通用底线文件 {core_path}")
+    product_path = PROMPTS_DIR / "products" / product / "constraints.md"
+    if not product_path.is_file():
+        raise RuntimeError(f"缺少产品约束文件 {product_path}")
+    layout_path = PROMPTS_DIR / "products" / product / "layouts" / f"{style_id}.md"
+    if not layout_path.is_file():
+        raise ValueError(
+            f"未知 prompt 版式：{style_id!r}；可选：{', '.join(item['id'] for item in list_prompt_styles(product))}"
+        )
+    core = core_path.read_text(encoding="utf-8-sig").strip()
+    constraints = product_path.read_text(encoding="utf-8-sig").strip()
+    layout = _parse_style_file(layout_path)
+    return f"{core}\n\n{constraints}\n\n{layout['text']}"
+
+
+DEFAULT_PROMPT = compose_base_prompt()
 
 DEFAULT_DIRECT_URL = "https://gptapi.longpean.com/gptImage/generateImageDirect"
 DEFAULT_UPLOAD_URL = "https://stpic.longpean.com/picture/upLoadQiNiu"
@@ -86,35 +123,21 @@ TEMPLATE_CONSTRAINT_MARKER = "【当前窗户模板硬约束"
 SIZE_CONSTRAINT_MARKER = "【本次任务唯一尺寸约束】"
 
 
-def _format_mm(value: float) -> str:
-    return f"{value:g}"
-
-
 def render_generation_prompt(custom_prompt: str | None, settings: dict[str, Any]) -> str:
-    """Append template and physical constraints to the user-editable common prompt."""
+    """Append the window-template constraint to the user-editable common prompt.
+
+    物理安装尺寸只影响后续几何/排版阶段（直接读 settings 数值），不进 prompt；
+    这里保留对旧尺寸 marker 的截断，老任务的 base 残留旧段时重渲染仍然幂等。
+    """
     base = (custom_prompt or DEFAULT_PROMPT).strip()
     markers = [marker for marker in (TEMPLATE_CONSTRAINT_MARKER, SIZE_CONSTRAINT_MARKER) if marker in base]
     if markers:
         base = base[: min(base.index(marker) for marker in markers)].rstrip()
 
-    template = get_window_template(settings.get("window_template"), allow_legacy=True)
-    if template["id"] == "legacy":
-        raise ValueError("旧版任务未指定窗户模板；从生图阶段重跑前请先选择单窗或双栏窗")
-    width = max(1.0, float(settings.get("install_width_mm", template["default_mm"][0])))
-    height = max(1.0, float(settings.get("install_height_mm", template["default_mm"][1])))
-    template_ratio = float(template["ratio"][0]) / float(template["ratio"][1])
-    if abs((width / height) / template_ratio - 1.0) > 0.001:
-        height = width / template_ratio
-    occupancy = min(1.0, max(0.01, float(settings.get("content_occupancy_ratio", 0.85))))
-    ratio = Fraction(width / height).limit_denominator(100)
-    orientation = "竖版" if height > width else ("横版" if width > height else "方形")
-
-    constraint = f"""{template["prompt_constraint"]}
-
-{SIZE_CONSTRAINT_MARKER}
-本任务只使用一套物理尺寸：目标小型窗户玻璃范围与整套窗贴推荐展开范围统一为 {_format_mm(width)} × {_format_mm(height)} mm（宽 × 高），宽高比约为 {ratio.numerator}:{ratio.denominator}，画布方向为{orientation}。这不是两套尺寸，窗贴设计完成后的整体推荐展开范围就近似等于这扇目标窗户的尺寸。
-有效图案主体与必要装饰合计应占该展开范围约 {occupancy * 100:g}%，其余作为自然留白和窗格分隔；不得把整套图案再次按另一套“贴纸尺寸”缩放。模型只需遵守比例、构图层级和相对占比，精确毫米尺寸由后续程序排版与输出阶段确定。"""
-    return f"{base}\n\n{constraint}"
+    spec = resolve_window_spec(settings, allow_legacy=True)
+    if spec["id"] == "legacy":
+        raise ValueError("旧版任务未指定窗户模板；从生图阶段重跑前请先选择窗型预设或分栏×画布组合")
+    return f"{base}\n\n{spec['prompt_constraint']}"
 
 
 def _compat_endpoint() -> str:
@@ -246,6 +269,22 @@ def upload_image_to_cloud(source_path: Path) -> tuple[str, dict[str, Any]]:
 _upload_reference = upload_image_to_cloud
 
 
+def _wait_reference_ready(url: str, attempts: int = 3) -> None:
+    """上传后预热并确认参考图 URL 可访问，缓解 CDN 首次回源超时（504）。
+
+    确认失败不阻断——生图接口自身还有重试兜底。
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            response = requests.get(url, timeout=(10, 30))
+            if response.status_code == 200 and response.content:
+                return
+        except requests.RequestException:
+            pass
+        if attempt < attempts:
+            time.sleep(2 * attempt)
+
+
 def _parse_size(value: str) -> tuple[int, int]:
     match = re.fullmatch(r"\s*(\d+)\s*[xX×]\s*(\d+)\s*", value)
     if not match:
@@ -257,20 +296,20 @@ def _parse_size(value: str) -> tuple[int, int]:
 
 
 def _choose_generation_size(source_path: Path, settings: dict[str, Any] | None = None) -> str:
-    del source_path  # The selected window template, not the source image, controls the canvas.
-    template = get_window_template((settings or {}).get("window_template"), allow_legacy=True)
-    if template["id"] == "legacy":
-        raise ValueError("旧版任务未指定窗户模板；从生图阶段重跑前请先选择单窗或双栏窗")
+    del source_path  # The selected canvas spec, not the source image, controls the canvas.
+    spec = resolve_window_spec(settings, allow_legacy=True)
+    if spec["id"] == "legacy":
+        raise ValueError("旧版任务未指定窗户模板；从生图阶段重跑前请先选择窗型预设或分栏×画布组合")
     configured = os.getenv("LP_IMAGE_SIZE", "auto").strip() or "auto"
     if configured.lower() == "auto":
-        return str(template["generation_size"])
+        return str(spec["generation_size"])
     width, height = _parse_size(configured)
     actual_ratio = width / height
-    expected_ratio = expected_aspect_ratio(template["id"])
-    if expected_ratio is None or abs(actual_ratio / expected_ratio - 1.0) > 0.02:
+    expected_ratio = float(spec["ratio"][0]) / float(spec["ratio"][1])
+    if abs(actual_ratio / expected_ratio - 1.0) > 0.02:
         raise ValueError(
-            f"LP_IMAGE_SIZE={configured} 与窗户模板 {template['id']} 的期望比例 "
-            f"{template['ratio'][0]}:{template['ratio'][1]} 不一致；请改为 auto 或匹配比例的尺寸"
+            f"LP_IMAGE_SIZE={configured} 与窗户模板 {spec['id']} 的期望比例 "
+            f"{spec['ratio'][0]}:{spec['ratio'][1]} 不一致；请改为 auto 或匹配比例的尺寸"
         )
     return f"{width}x{height}"
 
@@ -324,6 +363,7 @@ def _generate_master_direct(
         raise RuntimeError("未配置 LP_IMAGE_DIRECT_URL")
     prompt = (custom_prompt or DEFAULT_PROMPT).strip()
     reference_url, upload_response = _upload_reference(source_path)
+    _wait_reference_ready(reference_url)
     size = _choose_generation_size(source_path, settings)
     request_payload = {
         "prompt": prompt,
@@ -333,21 +373,31 @@ def _generate_master_direct(
         "operatorId": int(os.getenv("LP_OPERATOR_ID", "0") or 0),
         "operatorName": os.getenv("LP_OPERATOR_NAME", "Window Sticker Workbench"),
     }
-    response = requests.post(
-        endpoint,
-        headers=_headers(os.getenv("LP_IMAGE_TOKEN", "").strip()),
-        json=request_payload,
-        timeout=(30, 660),
-    )
-    if response.status_code >= 400:
-        raise RuntimeError(f"生图接口返回 HTTP {response.status_code}: {response.text[:2000]}")
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise RuntimeError("生图接口没有返回 JSON") from exc
-    if not isinstance(payload, dict) or int(payload.get("success", 0)) != 1:
-        message = payload.get("errorStr") if isinstance(payload, dict) else "未知错误"
-        raise RuntimeError(f"生图接口业务失败: {message}")
+    # 图床 CDN 刚上传后偶发 5xx（如“参考图 HTTP 504”），这类瞬时故障自动重试。
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.post(
+                endpoint,
+                headers=_headers(os.getenv("LP_IMAGE_TOKEN", "").strip()),
+                json=request_payload,
+                timeout=(30, 660),
+            )
+            if response.status_code >= 400:
+                raise RuntimeError(f"生图接口返回 HTTP {response.status_code}: {response.text[:2000]}")
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise RuntimeError("生图接口没有返回 JSON") from exc
+            if not isinstance(payload, dict) or int(payload.get("success", 0)) != 1:
+                message = payload.get("errorStr") if isinstance(payload, dict) else "未知错误"
+                raise RuntimeError(f"生图接口业务失败: {message}")
+            break
+        except (requests.RequestException, RuntimeError) as exc:
+            transient = re.search(r"HTTP\s*5\d{2}", str(exc)) or isinstance(exc, requests.RequestException)
+            if attempt >= max_attempts or not transient:
+                raise
+            time.sleep(5 * attempt)
     data = payload.get("data") or {}
     image_url = data.get("imageUrl") or next(iter(data.get("imageUrls") or []), "")
     if not image_url:
@@ -472,17 +522,20 @@ def generate_master(
     custom_prompt: str | None = None,
     settings: dict[str, Any] | None = None,
 ) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
-    template = get_window_template((settings or {}).get("window_template"), allow_legacy=True)
+    spec = resolve_window_spec(settings, allow_legacy=True)
     if os.getenv("LP_IMAGE_PROVIDER", "chat_compat").strip().lower() == "direct":
         result = _generate_master_direct(source_path, job_dir, custom_prompt, settings)
     else:
         result = _generate_master_chat_compat(source_path, job_dir, custom_prompt, settings)
     master_path, artifacts, metadata = result
+    ratio = spec.get("ratio")
     metadata.update(
         {
-            "window_template": template["id"],
+            "window_template": spec["id"],
+            "frame_id": spec.get("frame_id"),
+            "canvas_id": spec.get("canvas_id"),
             "generation_size_requested": metadata.get("size_requested"),
-            "expected_aspect_ratio": expected_aspect_ratio(template["id"]),
+            "expected_aspect_ratio": (float(ratio[0]) / float(ratio[1])) if ratio else None,
             "template_constraint_version": TEMPLATE_CONSTRAINT_VERSION,
         }
     )

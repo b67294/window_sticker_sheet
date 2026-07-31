@@ -85,6 +85,7 @@ function renderCards() {
         <div class="review-meta">
           <span class="chip">${escapeHtml((job.created_at || "").slice(0, 16).replace("T", " "))}</span>
           <span class="chip">${escapeHtml(job.window_template_label || job.window_template)}</span>
+          ${job.prompt_style ? `<span class="chip">样式 ${escapeHtml(job.prompt_style)}</span>` : ""}
           <span class="chip hash" title="Prompt 版本指纹">prompt ${escapeHtml(job.prompt_hash || "?")}</span>
           <span>${escapeHtml(job.source_name || "")}</span>
         </div>

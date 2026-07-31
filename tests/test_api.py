@@ -37,9 +37,19 @@ def test_defaults_publish_window_templates_and_upload_warns_on_ratio(tmp_path, m
     defaults = client.get("/api/defaults").json()
     assert defaults["default_window_template"] == "double"
     assert {item["id"]: item["generation_size"] for item in defaults["window_templates"]} == {
-        "single": "1056x1408",
         "double": "1216x1216",
+        "single_portrait": "1168x1392",
+        "single_landscape": "1392x1168",
+        "big_single": "1216x1216",
+        "single": "1056x1408",
     }
+    assert {item["id"] for item in defaults["window_frames"]} == {"pane1", "pane2", "pane3"}
+    assert {item["id"] for item in defaults["canvas_ratios"]} == {"1:1", "73:87", "87:73", "3:4"}
+    assert defaults["window_templates"][0]["id"] == "double"
+    assert [item["id"] for item in defaults["prompt_styles"]][:3] == [
+        "scene", "large_elements", "small_scatter",
+    ]
+    assert defaults["default_prompt_style"] == "scene"
     response = client.post(
         "/api/jobs",
         data={
@@ -237,9 +247,9 @@ def test_ecommerce_batch_creates_independent_serial_children(tmp_path, monkeypat
     child_jobs = [webapp._jobs[item["job_id"]] for item in batch["items"]]
     assert all(job["input_mode"] == "source" for job in child_jobs)
     assert all(job["generation_prompt"].startswith(prompt) for job in child_jobs)
-    assert all("600 × 600 mm" in job["generation_prompt"] for job in child_jobs)
+    assert all("【本次任务唯一尺寸约束】" not in job["generation_prompt"] for job in child_jobs)
     assert all(job["settings"]["window_template"] == "double" for job in child_jobs)
-    assert all(job["generation_prompt"].count("【本次任务唯一尺寸约束】") == 1 for job in child_jobs)
+    assert all(job["generation_prompt"].count("【当前窗户模板硬约束") == 1 for job in child_jobs)
     assert all(job["render_pdf"] is True for job in child_jobs)
     assert len({webapp.job_dir(job["id"]) for job in child_jobs}) == 3
 

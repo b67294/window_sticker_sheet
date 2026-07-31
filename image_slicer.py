@@ -213,15 +213,6 @@ def slice_image(
                 page = tile.convert("RGB")
             pdf_pages.append(page)
 
-    # 所有切块合并为一个多页 PDF（每块一页，行优先顺序，300 DPI 折算页面尺寸）。
-    pdf_path = output_dir / "tiles.pdf"
-    pdf_pages[0].save(
-        pdf_path,
-        save_all=True,
-        append_images=pdf_pages[1:],
-        resolution=300.0,
-    )
-
     preview = image.convert("RGB").copy()
     from PIL import ImageDraw
 
@@ -237,6 +228,15 @@ def slice_image(
         draw.line((x0, y, x1, y), fill=(244, 111, 87), width=line_width)
     preview_path = output_dir / "preview.jpg"
     preview.save(preview_path, quality=90)
+
+    # 合并 PDF：第一页为切分示意图（整图+红色网格线），之后每块一页，行优先顺序。
+    pdf_path = output_dir / "tiles.pdf"
+    preview.save(
+        pdf_path,
+        save_all=True,
+        append_images=pdf_pages,
+        resolution=300.0,
+    )
 
     return {
         "source_size": [image.width, image.height],

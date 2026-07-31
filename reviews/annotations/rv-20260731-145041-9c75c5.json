@@ -1,0 +1,14 @@
+{
+  "id": "rv-20260731-145041-9c75c5",
+  "created_at": "2026-07-31T14:50:41+08:00",
+  "job_id": "20260731-142132-8e1fd979",
+  "image": "generate/master.png",
+  "prompt_hash": "525bdc56",
+  "window_template": "single_landscape",
+  "defect_types": [
+    "custom_0bec23b9"
+  ],
+  "severity": "medium",
+  "note": "和原图太像了 创新性不足",
+  "status": "open"
+}

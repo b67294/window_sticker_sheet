@@ -9,6 +9,9 @@ const inputModeNotes = {
 const inputModeNames = { master: "白底母版", alpha: "透明 PNG", source: "电商原图" };
 let defaults = null;
 let windowTemplates = {};
+let windowFrames = {};
+let canvasRatios = {};
+let promptStyles = {};
 let currentJob = null;
 let currentBatch = null;
 let activeStage = "input";
@@ -99,33 +102,102 @@ function populateSettings(settings) {
     else if (input.dataset.settingTransform === "percent") input.value = Number(settings[key]) * 100;
     else input.value = settings[key];
   });
+  syncPresetSelect();
   renderWindowTemplateInfo();
+  renderPromptStyleInfo();
   updateWeightOutputs();
   schedulePromptPreview();
 }
 
+function renderPromptStyleInfo() {
+  const style = promptStyles[$("prompt-style").value];
+  $("prompt-style-description").textContent = style ? style.description : "";
+}
+
+function applyPromptStyle() {
+  const style = promptStyles[$("prompt-style").value];
+  renderPromptStyleInfo();
+  if (!style) return;
+  const current = $("generation-prompt").value.trim();
+  const isKnownStyleText = !current || Object.values(promptStyles).some((item) => item.text.trim() === current);
+  if (!isKnownStyleText && !confirm("切换样式会用该样式的标准文本覆盖当前已编辑的 Prompt，确定？")) {
+    return;
+  }
+  $("generation-prompt").value = style.text;
+  schedulePromptPreview();
+}
+
 function currentTemplate() {
-  return windowTemplates[$("window-template").value] || null;
+  // 由分栏骨架 × 画布比例两个子选择推导当前规格；legacy 时返回 null。
+  const frame = windowFrames[$("window-frame").value];
+  const canvas = canvasRatios[$("canvas-ratio").value];
+  if (!frame || !canvas) return null;
+  const preset = Object.values(windowTemplates).find(
+    (item) => item.frame_id === frame.id && item.canvas_id === canvas.id
+  ) || null;
+  return {
+    id: preset ? preset.id : "custom",
+    label: preset ? preset.label : `自定义 · ${frame.label} × ${canvas.label}`,
+    ratio: canvas.ratio,
+    generation_size: canvas.generation_size,
+    default_mm: preset ? preset.default_mm : null,
+    frame,
+    canvas,
+    preset,
+  };
 }
 
 function renderWindowTemplateInfo() {
-  const template = currentTemplate();
-  if (!template) {
-    $("window-template-description").textContent = "历史任务未指定模板；再次生图前请选择单窗或双栏窗。";
+  const spec = currentTemplate();
+  if (!spec) {
+    $("window-template-description").textContent = "历史任务未指定模板；再次生图前请选择窗型预设。";
     $("window-template-constraint").textContent = "旧版未指定";
     return;
   }
   $("window-template-description").textContent =
-    `${template.description} · 生成画布 ${template.generation_size}`;
-  $("window-template-constraint").textContent = template.prompt_constraint;
+    `${spec.frame.label} × ${spec.canvas.label} · 生成画布 ${spec.generation_size}`;
+  $("window-template-constraint").textContent = spec.frame.prompt_constraint;
+}
+
+function syncPresetSelect() {
+  const spec = currentTemplate();
+  if (!spec) return;
+  const select = $("window-template");
+  if (spec.preset) {
+    select.value = spec.preset.id;
+  } else {
+    select.value = "custom";
+  }
 }
 
 function applyWindowTemplate() {
-  const template = currentTemplate();
-  if (!template) return;
+  const preset = windowTemplates[$("window-template").value];
+  if (!preset) { renderWindowTemplateInfo(); return; }
+  $("window-frame").value = preset.frame_id;
+  $("canvas-ratio").value = preset.canvas_id;
   syncingTemplateDimensions = true;
-  $("install-width").value = template.default_mm[0];
-  $("install-height").value = template.default_mm[1];
+  $("install-width").value = preset.default_mm[0];
+  $("install-height").value = preset.default_mm[1];
+  syncingTemplateDimensions = false;
+  renderWindowTemplateInfo();
+  validateSelectedImageAspect();
+  schedulePromptPreview();
+}
+
+function applyFrameOrCanvas() {
+  syncPresetSelect();
+  const spec = currentTemplate();
+  if (!spec) return;
+  syncingTemplateDimensions = true;
+  if (spec.default_mm) {
+    $("install-width").value = spec.default_mm[0];
+    $("install-height").value = spec.default_mm[1];
+  } else {
+    const ratio = Number(spec.ratio[0]) / Number(spec.ratio[1]);
+    const width = Number($("install-width").value) || 600;
+    $("install-width").value = width;
+    $("install-height").value = (width / ratio).toFixed(1).replace(/\.0$/, "");
+  }
   syncingTemplateDimensions = false;
   renderWindowTemplateInfo();
   validateSelectedImageAspect();
@@ -134,9 +206,9 @@ function applyWindowTemplate() {
 
 function syncTemplateDimension(source) {
   if (syncingTemplateDimensions) return;
-  const template = currentTemplate();
-  if (!template) return;
-  const ratio = Number(template.ratio[0]) / Number(template.ratio[1]);
+  const spec = currentTemplate();
+  if (!spec) return;
+  const ratio = Number(spec.ratio[0]) / Number(spec.ratio[1]);
   syncingTemplateDimensions = true;
   if (source === "width") {
     $("install-height").value = (Number($("install-width").value) / ratio).toFixed(1).replace(/\.0$/, "");
@@ -752,8 +824,20 @@ async function init() {
   try {
     defaults = await api("/api/defaults");
     windowTemplates = Object.fromEntries((defaults.window_templates || []).map((item) => [item.id, item]));
+    windowFrames = Object.fromEntries((defaults.window_frames || []).map((item) => [item.id, item]));
+    canvasRatios = Object.fromEntries((defaults.canvas_ratios || []).map((item) => [item.id, item]));
     $("window-template").innerHTML = (defaults.window_templates || []).map((item) =>
       `<option value="${item.id}">${escapeHtml(item.label)}${item.id === defaults.default_window_template ? "（默认）" : ""}</option>`
+    ).join("") + '<option value="custom">自定义组合</option>';
+    $("window-frame").innerHTML = (defaults.window_frames || []).map((item) =>
+      `<option value="${item.id}">${escapeHtml(item.label)}</option>`
+    ).join("");
+    $("canvas-ratio").innerHTML = (defaults.canvas_ratios || []).map((item) =>
+      `<option value="${item.id}">${escapeHtml(item.label)}</option>`
+    ).join("");
+    promptStyles = Object.fromEntries((defaults.prompt_styles || []).map((item) => [item.id, item]));
+    $("prompt-style").innerHTML = (defaults.prompt_styles || []).map((item) =>
+      `<option value="${item.id}">${escapeHtml(item.label)}${item.id === defaults.default_prompt_style ? "（默认）" : ""}</option>`
     ).join("");
     populateSettings(defaults.settings);
     $("generation-prompt").value = defaults.generation_prompt;
@@ -790,6 +874,9 @@ $("compactness-weight").addEventListener("input", updateWeightOutputs);
 $("alignment-weight").addEventListener("input", updateWeightOutputs);
 $("balance-weight").addEventListener("input", updateWeightOutputs);
 $("window-template").addEventListener("change", applyWindowTemplate);
+$("window-frame").addEventListener("change", applyFrameOrCanvas);
+$("canvas-ratio").addEventListener("change", applyFrameOrCanvas);
+$("prompt-style").addEventListener("change", applyPromptStyle);
 $("install-width").addEventListener("input", () => syncTemplateDimension("width"));
 $("install-height").addEventListener("input", () => syncTemplateDimension("height"));
 $("generation-prompt").addEventListener("input", schedulePromptPreview);

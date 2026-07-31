@@ -1,0 +1,30 @@
+{
+  "type": "stacked-bars",
+  "title": "一次真实完整任务的耗时构成",
+  "subtitle": "任务 20260730-143651-9d613fca；有效处理合计 403.44 秒",
+  "width": 1500,
+  "rows": [
+    {
+      "label": "完整链路",
+      "meta": "14 primitives / 10 groups / 4 sheets",
+      "segments": [
+        {
+          "label": "生图",
+          "value": 171.3,
+          "tone": "purple"
+        },
+        {
+          "label": "ComfyUI",
+          "value": 165.74,
+          "tone": "blue"
+        },
+        {
+          "label": "本地分析与排版",
+          "value": 66.4,
+          "tone": "green"
+        }
+      ]
+    }
+  ],
+  "insight": "生图与去背合计占 83.5%；吞吐瓶颈首先在远端服务。"
+}

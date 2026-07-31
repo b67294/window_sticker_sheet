@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="420" viewBox="0 0 1500 420" role="img" aria-labelledby="title desc">
+<title id="title">窗贴生产链：从参考图到可印刷文件</title>
+<desc id="desc">Designed technical information graphic</desc>
+<defs>
+<filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+<feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#18212F" flood-opacity=".08"/>
+</filter>
+<pattern id="dot-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+<circle cx="2" cy="2" r="1.1" fill="#DDE5EF"/>
+</pattern>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#A7B4C2"/>
+</marker>
+<marker id="arrow-red" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#C85454"/>
+</marker>
+</defs>
+<rect x="0.0" y="0.0" width="1500.0" height="420.0" rx="0.0" fill="#F8FAFC" stroke="none" stroke-width="1.5"/>
+<text x="58.0" y="62.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="34.0" font-weight="600" fill="#172033" text-anchor="start"><tspan x="58.0" dy="0.0">窗贴生产链：从参考图到可印刷文件</tspan></text>
+<text x="58.0" y="100.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="17.0" font-weight="400" fill="#667085" text-anchor="start"><tspan x="58.0" dy="0.0">代码、任务日志与回归测试共同验证的系统资产</tspan></text>
+<g filter="url(#shadow)"><rect x="58.0" y="170.0" width="328.0" height="190.0" rx="16.0" fill="#FFFFFF" stroke="#D7E0EA" stroke-width="1.0"/></g>
+<rect x="58.0" y="170.0" width="8.0" height="190.0" rx="4.0" fill="#3F78C5" stroke="none" stroke-width="1.5"/>
+<text x="86.0" y="212.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="15.0" font-weight="600" fill="#667085" text-anchor="start"><tspan x="86.0" dy="0.0">输入入口</tspan></text>
+<text x="86.0" y="275.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="38.0" font-weight="700" fill="#3F78C5" text-anchor="start"><tspan x="86.0" dy="0.0">3</tspan></text>
+<text x="86.0" y="321.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="14.0" font-weight="400" fill="#475467" text-anchor="start"><tspan x="86.0" dy="0.0">原图 / 白底 / 透明 PNG</tspan></text>
+<g filter="url(#shadow)"><rect x="410.0" y="170.0" width="328.0" height="190.0" rx="16.0" fill="#FFFFFF" stroke="#D7E0EA" stroke-width="1.0"/></g>
+<rect x="410.0" y="170.0" width="8.0" height="190.0" rx="4.0" fill="#8A63B8" stroke="none" stroke-width="1.5"/>
+<text x="438.0" y="212.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="15.0" font-weight="600" fill="#667085" text-anchor="start"><tspan x="438.0" dy="0.0">核心阶段</tspan></text>
+<text x="438.0" y="275.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="38.0" font-weight="700" fill="#8A63B8" text-anchor="start"><tspan x="438.0" dy="0.0">6</tspan></text>
+<text x="438.0" y="321.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="14.0" font-weight="400" fill="#475467" text-anchor="start"><tspan x="438.0" dy="0.0">按依赖失效，可分段重跑</tspan></text>
+<g filter="url(#shadow)"><rect x="762.0" y="170.0" width="328.0" height="190.0" rx="16.0" fill="#FFFFFF" stroke="#D7E0EA" stroke-width="1.0"/></g>
+<rect x="762.0" y="170.0" width="8.0" height="190.0" rx="4.0" fill="#D49A18" stroke="none" stroke-width="1.5"/>
+<text x="790.0" y="212.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="15.0" font-weight="600" fill="#667085" text-anchor="start"><tspan x="790.0" dy="0.0">排版候选</tspan></text>
+<text x="790.0" y="275.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="38.0" font-weight="700" fill="#D49A18" text-anchor="start"><tspan x="790.0" dy="0.0">4</tspan></text>
+<text x="790.0" y="321.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="14.0" font-weight="400" fill="#475467" text-anchor="start"><tspan x="790.0" dy="0.0">并行计算，可人工改选</tspan></text>
+<g filter="url(#shadow)"><rect x="1114.0" y="170.0" width="328.0" height="190.0" rx="16.0" fill="#FFFFFF" stroke="#D7E0EA" stroke-width="1.0"/></g>
+<rect x="1114.0" y="170.0" width="8.0" height="190.0" rx="4.0" fill="#2E8B57" stroke="none" stroke-width="1.5"/>
+<text x="1142.0" y="212.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="15.0" font-weight="600" fill="#667085" text-anchor="start"><tspan x="1142.0" dy="0.0">回归测试</tspan></text>
+<text x="1142.0" y="275.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="38.0" font-weight="700" fill="#2E8B57" text-anchor="start"><tspan x="1142.0" dy="0.0">47</tspan></text>
+<text x="1142.0" y="321.0" font-family="'Microsoft YaHei','Noto Sans CJK SC','PingFang SC','Inter',sans-serif" font-size="14.0" font-weight="400" fill="#475467" text-anchor="start"><tspan x="1142.0" dy="0.0">2026-07-31 全部通过</tspan></text>
+</svg>

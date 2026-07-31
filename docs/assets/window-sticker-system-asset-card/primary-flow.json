@@ -1,0 +1,89 @@
+{
+  "type": "process",
+  "title": "一张窗贴如何变成生产 Sheet",
+  "subtitle": "AI 负责重建与关系判断，确定性算法负责像素、毫米和碰撞约束",
+  "width": 1700,
+  "phases": [
+    {
+      "label": "阶段 1 | 输入与母版",
+      "tone": "blue",
+      "span": 2
+    },
+    {
+      "label": "阶段 2 | 透明与理解",
+      "tone": "purple",
+      "span": 2
+    },
+    {
+      "label": "阶段 3 | 几何与交付",
+      "tone": "amber",
+      "span": 2
+    }
+  ],
+  "steps": [
+    {
+      "badge": "01",
+      "title": "输入分流",
+      "tone": "blue",
+      "lines": [
+        "原图 / 白底 / 透明 PNG",
+        "输出：可恢复任务"
+      ]
+    },
+    {
+      "badge": "02",
+      "title": "模板化母版",
+      "tone": "purple",
+      "lines": [
+        "单窗 3:4 / 双栏 1:1",
+        "输出：白底母版"
+      ]
+    },
+    {
+      "badge": "03",
+      "title": "透明化",
+      "tone": "green",
+      "lines": [
+        "ComfyUI 或 Alpha 直通",
+        "输出：foreground.png"
+      ]
+    },
+    {
+      "badge": "04",
+      "title": "组件理解",
+      "tone": "purple",
+      "lines": [
+        "OpenCV primitive",
+        "距离 + 语义 group"
+      ]
+    },
+    {
+      "badge": "05",
+      "title": "生产几何",
+      "tone": "amber",
+      "lines": [
+        "可见 / 裁切 / 占用轮廓",
+        "输出：毫米级 geometry"
+      ]
+    },
+    {
+      "badge": "06",
+      "title": "排版与交付",
+      "tone": "green",
+      "lines": [
+        "四候选并行评分",
+        "PNG / JPG / PDF / JSON"
+      ]
+    }
+  ],
+  "note": {
+    "title": "可恢复边界",
+    "text": "每一阶段落盘；参数变化只失效受影响的下游阶段。",
+    "tone": "blue"
+  },
+  "reject": {
+    "from": 3,
+    "title": "语义失败：保留距离分组",
+    "text": "不猜测刚性关系，生产主链继续。"
+  }
+}
