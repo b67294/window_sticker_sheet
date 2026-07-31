@@ -4,3 +4,4 @@ __pycache__/
 runs/*
 !runs/.gitkeep
 *.zip
+slicer_runs/

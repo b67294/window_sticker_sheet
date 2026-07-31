@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>比例切块 · 窗贴 Sheet Workbench</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .slicer-shell { min-height: calc(100vh - 82px); display: grid; grid-template-columns: 360px minmax(0, 1fr); }
+    .slicer-main { min-width: 0; padding: 22px 26px 60px; display: grid; gap: 18px; align-content: start; }
+    .slicer-card { padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: white; box-shadow: 0 8px 25px rgba(26, 62, 71, .05); }
+    .ratio-row { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: center; margin-top: 9px; }
+    .ratio-row input { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 8px; text-align: center; }
+    .ratio-row span { color: var(--muted); font-weight: 700; }
+    .grid-override { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 9px; }
+    .grid-override input { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+    .plan-meta { display: flex; flex-wrap: wrap; gap: 7px; margin: 10px 0; color: var(--muted); font-size: 12px; }
+    .plan-meta .chip { padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: #f6fafa; color: var(--ink); }
+    .plan-meta .chip.warn { background: #fdf3e2; color: #8a6116; border-color: #ecd9ae; }
+    .preview-box { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #f2f6f6; }
+    .preview-box img { width: 100%; display: block; }
+    .tiles-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-top: 12px; }
+    .tile-item { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #fbfdfd; text-align: center; }
+    .tile-item img { width: 100%; display: block; background: repeating-conic-gradient(#eee 0 25%, white 0 50%) 0 0/16px 16px; }
+    .tile-item small { display: block; padding: 5px; color: var(--muted); }
+    .alt-plan { display: flex; justify-content: space-between; gap: 8px; padding: 7px 10px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+    .alt-plan:hover { background: var(--mint); }
+    .alt-plan:nth-child(odd) { background: #f4f8f8; }
+    .alt-plan b { color: var(--teal-dark); }
+    .history-item { display: flex; align-items: center; gap: 9px; padding: 6px; border: 1px solid var(--line); border-radius: 9px; background: white; margin-top: 7px; cursor: pointer; }
+    .history-item:hover { border-color: var(--teal); }
+    .history-item img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; }
+    .history-item small { color: var(--muted); font-size: 11px; }
+    .empty-hint { padding: 60px 20px; text-align: center; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <span class="eyebrow">RATIO SLICER / 独立小工具</span>
+      <h1>比例切块</h1>
+    </div>
+    <div class="top-actions">
+      <a href="/review" class="ghost">评图</a>
+      <a href="/" class="ghost">返回工作台</a>
+    </div>
+  </header>
+
+  <div class="slicer-shell">
+    <aside class="sidebar">
+      <div class="panel-block">
+        <div class="section-title"><span>01</span>上传整图</div>
+        <label class="dropzone" id="dropzone">
+          <span class="drop-icon">+</span>
+          <strong>选择或拖入图片</strong>
+          <small>PNG / JPG / WEBP · 最大 20MB</small>
+          <input id="file" type="file" accept=".png,.jpg,.jpeg,.webp">
+        </label>
+        <div id="file-name" style="margin-top:8px;color:var(--muted);font-size:12px"></div>
+      </div>
+      <div class="panel-block">
+        <div class="section-title"><span>02</span>小块宽高比</div>
+        <div class="ratio-row">
+          <input id="ratio-w" type="number" step="any" min="0.01" value="29" placeholder="宽">
+          <span>:</span>
+          <input id="ratio-h" type="number" step="any" min="0.01" value="36.5" placeholder="高">
+        </div>
+        <small style="color:var(--muted)">只取比值，与物理单位无关。例：29 : 36.5</small>
+        <div class="grid-override">
+          <label style="color:var(--muted);font-size:11px">列数（留空自动）
+            <input id="force-columns" type="number" min="1" max="8" placeholder="自动">
+          </label>
+          <label style="color:var(--muted);font-size:11px">行数（留空自动）
+            <input id="force-rows" type="number" min="1" max="8" placeholder="自动">
+          </label>
+        </div>
+        <button class="primary large" id="run" style="margin-top:12px">切块 →</button>
+      </div>
+      <div class="panel-block">
+        <div class="section-title"><span>03</span>比例 Resize</div>
+        <label class="dropzone" id="resize-dropzone" style="min-height:70px">
+          <strong>选择要 Resize 的图片</strong>
+          <small>独立于上面的切块功能</small>
+          <input id="resize-file" type="file" accept=".png,.jpg,.jpeg,.webp">
+        </label>
+        <div id="resize-file-name" style="margin-top:6px;color:var(--muted);font-size:12px"></div>
+        <label style="display:block;margin-top:9px;color:var(--muted);font-size:11px">目标模板
+          <select id="resize-template" style="width:100%;margin-top:4px;padding:8px;border:1px solid var(--line);border-radius:8px">
+            <option value="73x87" selected>竖版 · 高87 : 宽73</option>
+            <option value="87x73">横版 · 高73 : 宽87</option>
+            <option value="custom">自定义比例…</option>
+          </select>
+        </label>
+        <div class="ratio-row" id="resize-custom-ratio" hidden>
+          <input id="resize-ratio-w" type="number" step="any" min="0.01" placeholder="宽">
+          <span>:</span>
+          <input id="resize-ratio-h" type="number" step="any" min="0.01" placeholder="高">
+        </div>
+        <label style="display:block;margin-top:9px;color:var(--muted);font-size:11px">方式
+          <select id="resize-mode" style="width:100%;margin-top:4px;padding:8px;border:1px solid var(--line);border-radius:8px">
+            <option value="stretch" selected>拉伸（默认，不丢内容，会变形）</option>
+            <option value="crop">居中裁剪（不变形，会丢边缘）</option>
+          </select>
+        </label>
+        <button class="primary large" id="resize-run" style="margin-top:12px">Resize →</button>
+      </div>
+      <div class="panel-block">
+        <div class="section-title"><span>04</span>最近任务</div>
+        <div id="history"></div>
+      </div>
+    </aside>
+
+    <main class="slicer-main">
+      <div id="resize-result" class="slicer-card" hidden>
+        <div class="plan-meta" id="resize-meta"></div>
+        <div class="preview-box" style="max-width:520px"><img id="resize-preview" alt="Resize 结果"></div>
+        <div style="display:flex;gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap">
+          <a class="primary" id="resize-download" href="#" download target="_blank">下载 Resize 结果 PNG</a>
+          <button class="secondary" id="resize-to-slice">把结果送去切块 →</button>
+          <small style="color:var(--muted)">使用上方"02 小块宽高比"里填的比例</small>
+        </div>
+      </div>
+      <div id="empty" class="empty-hint">上传整图、填好小块宽高比，点"切块"。<br>程序会自动算出能切几列几行（以裁掉面积最少为准）。</div>
+      <div id="result" hidden>
+        <div class="slicer-card">
+          <div class="plan-meta" id="plan-meta"></div>
+          <div class="preview-box"><img id="preview" alt="切块预览"></div>
+          <div style="display:flex;gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap">
+            <a class="primary" id="download-pdf" href="#" target="_blank">下载合并 PDF（每块一页）</a>
+            <a class="secondary" id="download" href="#" target="_blank">下载 PNG ZIP</a>
+            <small style="color:var(--muted)">红线为裁剪与切分位置</small>
+          </div>
+          <details style="margin-top:10px">
+            <summary>其他可选网格（点击切换）</summary>
+            <div id="alternatives" style="margin-top:8px"></div>
+          </details>
+          <div class="tiles-grid" id="tiles"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/slicer.js"></script>
+</body>
+</html>

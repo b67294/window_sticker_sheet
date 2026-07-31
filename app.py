@@ -41,6 +41,7 @@ def _load_local_env(path: Path) -> None:
 
 _load_local_env(Path(__file__).resolve().with_name(".env"))
 
+import image_slicer
 import pipeline
 from comfyui_client import comfyui_configured, remove_background
 from generation import DEFAULT_PROMPT, generate_master, generation_configured, render_generation_prompt
@@ -1039,6 +1040,199 @@ def add_defect_type(request: DefectTypeRequest) -> dict[str, Any]:
     types.append(new_type)
     _save_json_with_unique_temp(_defect_types_path(), types)
     return new_type
+
+
+# ---------------------------------------------------------------------------
+# 比例切块工具：独立小功能，逻辑全部在 image_slicer.py，随时可改可拆。
+# ---------------------------------------------------------------------------
+
+SLICER_DIR = APP_DIR / "slicer_runs"
+
+
+def _require_slicer_run(run_id: str) -> Path:
+    if not re.fullmatch(r"(?:slice|resize)-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}", run_id):
+        raise HTTPException(status_code=400, detail="无效的切块任务 ID")
+    directory = SLICER_DIR / run_id
+    if not directory.is_dir():
+        raise HTTPException(status_code=404, detail="切块任务不存在")
+    return directory
+
+
+def _slicer_payload(run_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(result)
+    payload["id"] = run_id
+    payload["preview_url"] = f"/api/slicer/{run_id}/files/preview.jpg"
+    payload["download_url"] = f"/api/slicer/{run_id}/download"
+    if result.get("pdf"):
+        payload["pdf_url"] = f"/api/slicer/{run_id}/files/{result['pdf']}"
+    payload["tiles"] = [
+        {**tile, "url": f"/api/slicer/{run_id}/files/tiles/{tile['name']}"}
+        for tile in result.get("tiles", [])
+    ]
+    return payload
+
+
+@app.get("/slicer")
+def slicer_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "slicer.html")
+
+
+@app.get("/api/slicer")
+def list_slicer_runs() -> list[dict[str, Any]]:
+    if not SLICER_DIR.is_dir():
+        return []
+    runs = []
+    for path in sorted(SLICER_DIR.glob("slice-*/plan.json"), reverse=True)[:20]:
+        try:
+            result = json.loads(path.read_text(encoding="utf-8"))
+            runs.append(_slicer_payload(path.parent.name, result))
+        except Exception:
+            continue
+    return runs
+
+
+@app.post("/api/slicer")
+async def create_slicer_run(
+    file: UploadFile = File(...),
+    ratio_width: float = Form(...),
+    ratio_height: float = Form(...),
+    columns: int | None = Form(None),
+    rows: int | None = Form(None),
+) -> dict[str, Any]:
+    file_name = file.filename or "upload.png"
+    suffix = Path(file_name).suffix.lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        raise HTTPException(status_code=400, detail=f"{file_name} 不是支持的图片格式")
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"{file_name} 超过 20 MB")
+    _validate_upload_bytes(content, "source")
+    run_id = f"slice-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    directory = SLICER_DIR / run_id
+    directory.mkdir(parents=True, exist_ok=True)
+    source_path = directory / f"source{suffix}"
+    source_path.write_bytes(content)
+    try:
+        result = image_slicer.slice_image(source_path, directory, ratio_width, ratio_height, columns, rows)
+    except ValueError as exc:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result["source_name"] = file_name
+    result["created_at"] = now_iso()
+    _save_json_with_unique_temp(directory / "plan.json", result)
+    return _slicer_payload(run_id, result)
+
+
+@app.post("/api/resize")
+async def create_resize_run(
+    file: UploadFile = File(...),
+    ratio_width: float = Form(...),
+    ratio_height: float = Form(...),
+    mode: Literal["stretch", "crop"] = Form("stretch"),
+    target_width: int | None = Form(None),
+    target_height: int | None = Form(None),
+) -> dict[str, Any]:
+    file_name = file.filename or "upload.png"
+    suffix = Path(file_name).suffix.lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        raise HTTPException(status_code=400, detail=f"{file_name} 不是支持的图片格式")
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"{file_name} 超过 20 MB")
+    _validate_upload_bytes(content, "source")
+    run_id = f"resize-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    directory = SLICER_DIR / run_id
+    directory.mkdir(parents=True, exist_ok=True)
+    source_path = directory / f"source{suffix}"
+    source_path.write_bytes(content)
+    try:
+        result = image_slicer.resize_image(
+            source_path, directory, ratio_width, ratio_height, mode, target_width, target_height
+        )
+    except ValueError as exc:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result["source_name"] = file_name
+    result["created_at"] = now_iso()
+    _save_json_with_unique_temp(directory / "resize.json", result)
+    payload = dict(result)
+    payload["id"] = run_id
+    payload["output_url"] = f"/api/slicer/{run_id}/files/resized.png"
+    return payload
+
+
+class ResliceRequest(BaseModel):
+    ratio_width: float
+    ratio_height: float
+    columns: int | None = None
+    rows: int | None = None
+
+
+@app.post("/api/resize/{run_id}/slice")
+def slice_resized_result(run_id: str, request: ResliceRequest) -> dict[str, Any]:
+    """把 Resize 的结果图作为源，创建一个新的切块任务。"""
+    directory = _require_slicer_run(run_id)
+    resized_path = directory / "resized.png"
+    if not resized_path.is_file():
+        raise HTTPException(status_code=404, detail="该任务没有 Resize 结果图")
+    old = json.loads((directory / "resize.json").read_text(encoding="utf-8")) if (directory / "resize.json").is_file() else {}
+    slice_id = f"slice-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    slice_dir = SLICER_DIR / slice_id
+    slice_dir.mkdir(parents=True, exist_ok=True)
+    source_path = slice_dir / "source.png"
+    shutil.copyfile(resized_path, source_path)
+    try:
+        result = image_slicer.slice_image(
+            source_path, slice_dir, request.ratio_width, request.ratio_height, request.columns, request.rows
+        )
+    except ValueError as exc:
+        shutil.rmtree(slice_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result["source_name"] = f"{old.get('source_name') or run_id}（Resize 后）"
+    result["created_at"] = now_iso()
+    result["from_resize"] = run_id
+    _save_json_with_unique_temp(slice_dir / "plan.json", result)
+    return _slicer_payload(slice_id, result)
+
+
+@app.post("/api/slicer/{run_id}/reslice")
+def reslice_run(run_id: str, request: ResliceRequest) -> dict[str, Any]:
+    directory = _require_slicer_run(run_id)
+    source_path = next(iter(directory.glob("source.*")), None)
+    if source_path is None:
+        raise HTTPException(status_code=404, detail="原图文件缺失")
+    old = json.loads((directory / "plan.json").read_text(encoding="utf-8")) if (directory / "plan.json").is_file() else {}
+    shutil.rmtree(directory / "tiles", ignore_errors=True)
+    try:
+        result = image_slicer.slice_image(
+            source_path, directory, request.ratio_width, request.ratio_height, request.columns, request.rows
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result["source_name"] = old.get("source_name")
+    result["created_at"] = old.get("created_at") or now_iso()
+    _save_json_with_unique_temp(directory / "plan.json", result)
+    return _slicer_payload(run_id, result)
+
+
+@app.get("/api/slicer/{run_id}/files/{file_path:path}")
+def get_slicer_file(run_id: str, file_path: str) -> FileResponse:
+    directory = _require_slicer_run(run_id).resolve()
+    target = (directory / file_path).resolve()
+    if directory not in target.parents or not target.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    media_type, _ = mimetypes.guess_type(target.name)
+    return FileResponse(target, media_type=media_type)
+
+
+@app.get("/api/slicer/{run_id}/download")
+def download_slicer_run(run_id: str) -> FileResponse:
+    directory = _require_slicer_run(run_id)
+    archive = directory / "tiles.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for tile in sorted((directory / "tiles").glob("*.png")):
+            bundle.write(tile, tile.name)
+    return FileResponse(archive, media_type="application/zip", filename=f"{run_id}-tiles.zip")
 
 
 @app.get("/api/defaults")
