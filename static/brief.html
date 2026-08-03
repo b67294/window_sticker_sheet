@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>创新简报实验室 · 窗贴 Sheet Workbench</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .brief-shell { min-height: calc(100vh - 82px); display: grid; grid-template-columns: 340px minmax(0, 1fr); }
+    .brief-main { min-width: 0; padding: 22px 26px 60px; display: grid; gap: 18px; align-content: start; }
+    .brief-card { padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: white; box-shadow: 0 8px 25px rgba(26, 62, 71, .05); }
+    .brief-top { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; }
+    .brief-top img { width: 100%; border: 1px solid var(--line); border-radius: 12px; background: #f2f6f6; }
+    .brief-summary { white-space: pre-wrap; font-size: 13px; line-height: 1.7; }
+    .brief-meta { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 10px; color: var(--muted); font-size: 12px; }
+    .brief-meta .chip { padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: #f6fafa; color: var(--ink); }
+    .direction-card { margin-top: 4px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: #fbfdfd; }
+    .direction-card h3 { margin: 0 0 6px; font-size: 14px; }
+    .direction-card .dir-note { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+    .direction-card textarea { min-height: 150px; font-size: 12px; line-height: 1.6; }
+    .dir-foot { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
+    .dir-foot .status { font-size: 12px; }
+    .dir-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
+    .dir-images a { display: block; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #f2f6f6; }
+    .dir-images img { width: 100%; display: block; }
+    .history-item { display: flex; align-items: center; gap: 9px; padding: 6px; border: 1px solid var(--line); border-radius: 9px; background: white; margin-top: 7px; cursor: pointer; }
+    .history-item:hover { border-color: var(--teal); }
+    .history-item img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; }
+    .history-item small { color: var(--muted); font-size: 11px; display: block; }
+    .empty-hint { padding: 60px 20px; text-align: center; color: var(--muted); }
+    .prompt-builder { display: grid; gap: 12px; }
+    .prompt-builder-head { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
+    .prompt-builder-head h2 { margin: 0; font-size: 18px; }
+    .prompt-builder-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .prompt-part-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .prompt-part { padding: 11px; border: 1px solid var(--line); border-radius: 12px; background: #fbfdfd; }
+    .prompt-part label { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 700; }
+    .prompt-part label small { color: var(--muted); font-weight: 400; }
+    .prompt-part textarea { min-height: 118px; margin-top: 7px; font-size: 11px; line-height: 1.55; }
+    .innovation-part textarea { min-height: 220px; }
+    .prompt-part select { width: 100%; margin-top: 7px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+    .prompt-save {
+      padding: 5px 10px;
+      color: var(--teal-dark) !important;
+      border: 1px solid #9fc9ce !important;
+      border-radius: 7px;
+      background: #f2fbfb !important;
+      box-shadow: 0 1px 3px rgba(25, 74, 82, .08);
+      white-space: nowrap;
+      font-weight: 700;
+    }
+    .prompt-save:hover { border-color: var(--teal) !important; background: #e1f5f3 !important; }
+    .final-prompt-block { margin-top: 10px; padding: 11px; border: 1px solid #a9d4d8; border-radius: 12px; background: #f4fbfb; }
+    .final-prompt-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+    .final-prompt-head strong { font-size: 12px; }
+    .final-prompt-head small { color: var(--muted); }
+    .final-prompt-block textarea { min-height: 230px; font-size: 11px; line-height: 1.55; background: white; }
+    .copy-prompt { padding: 6px 10px; }
+    .spin { display: inline-block; animation: spin 1.2s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (max-width: 980px) {
+      .brief-shell { grid-template-columns: 280px minmax(0, 1fr); }
+      .prompt-part-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <span class="eyebrow">VLM BRIEF LAB / 图→文→图 实验</span>
+      <h1>创新简报实验室</h1>
+    </div>
+    <div class="top-actions">
+      <a href="/review" class="ghost">评图</a>
+      <a href="/" class="ghost">返回工作台</a>
+    </div>
+  </header>
+
+  <div class="brief-shell">
+    <aside class="sidebar">
+      <div class="panel-block">
+        <div class="section-title"><span>01</span>上传电商原图</div>
+        <label class="dropzone" id="dropzone">
+          <span class="drop-icon">+</span>
+          <strong>选择或拖入图片（可多选）</strong>
+          <small>PNG / JPG / WEBP · 最大 20MB</small>
+          <input id="file" type="file" accept=".png,.jpg,.jpeg,.webp" multiple>
+        </label>
+        <label class="check-row" style="margin-top:9px">
+          <input id="auto-generate" type="checkbox" checked>
+          批量时反推后自动生成全部方向
+        </label>
+        <button class="primary large" id="run" style="margin-top:10px">反推 + 出 3 个衍生方向 →</button>
+        <small style="display:block;margin-top:8px;color:var(--muted)">
+          单张：反推后人工审阅再生成。多张：排队串行"反推→自动生成"，用当前组装选项，结果进下方最近实验。
+          VLM：luna（重试2次）→ sol → terra → gpt-4o。
+        </small>
+        <div id="batch-status" style="margin-top:8px;color:var(--teal-dark);font-size:12px"></div>
+      </div>
+      <div class="panel-block">
+        <div class="section-title"><span>02</span>最近实验</div>
+        <div id="history"></div>
+      </div>
+    </aside>
+
+    <main class="brief-main">
+      <section class="brief-card prompt-builder">
+        <div class="prompt-builder-head">
+          <div>
+            <h2>Prompt 组装器</h2>
+            <p>通用底线 + 产品约束 + 版式 + 每个方向的内容简报 + 画布比例规格</p>
+          </div>
+          <small id="compose-info" style="color:var(--muted)"></small>
+        </div>
+        <div class="prompt-part innovation-part">
+          <label>
+            <span>创新反推 Prompt</span>
+            <span><small>看图 → 反推重点 + 3 条内容简报；不直接拼入最终生图 Prompt</small> <button class="ghost prompt-save" data-save-prompt="innovation_prompt">保存</button></span>
+          </label>
+          <textarea id="innovation-prompt"></textarea>
+        </div>
+        <div class="prompt-part-grid">
+          <div class="prompt-part">
+            <label><span>1 通用底线</span><span><small>可编辑</small> <button class="ghost prompt-save" data-save-prompt="core_prompt">保存</button></span></label>
+            <textarea id="core-prompt"></textarea>
+          </div>
+          <div class="prompt-part">
+            <label><span>2 产品约束</span><span><small>暂时为空，可选填</small> <button class="ghost prompt-save" data-save-prompt="product_prompt">保存</button></span></label>
+            <textarea id="product-prompt" placeholder="无"></textarea>
+          </div>
+          <div class="prompt-part">
+            <label><span>3 版式</span><span><small>大元素 / 满铺</small> <button class="ghost prompt-save" data-save-prompt="layout_prompt">保存</button></span></label>
+            <select id="prompt-style"></select>
+            <textarea id="layout-prompt"></textarea>
+          </div>
+          <div class="prompt-part">
+            <label><span>5 规格</span><small>只控制画布比例</small></label>
+            <select id="canvas-ratio"></select>
+            <textarea id="spec-prompt" readonly></textarea>
+          </div>
+        </div>
+        <small style="color:var(--muted)">第 4 段“内容简报”在每个衍生方向中单独编辑；其下方会显示该方向最终实际发送的合并 Prompt。</small>
+      </section>
+      <div id="empty" class="empty-hint">上传一张电商原图，点"反推"。<br>VLM 会先输出反推重点和 3 条差异化衍生提示词，你逐条审阅、修改，再决定生成哪几个。</div>
+      <div id="run-view" hidden>
+        <div class="brief-card">
+          <div class="brief-meta" id="run-meta"></div>
+          <div class="brief-top">
+            <a id="source-link" target="_blank"><img id="source-img" alt="原图"></a>
+            <div>
+              <strong>反推重点</strong>
+              <div class="brief-summary" id="summary"></div>
+            </div>
+          </div>
+        </div>
+        <div id="directions"></div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/brief.js"></script>
+</body>
+</html>

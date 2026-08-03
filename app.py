@@ -41,6 +41,7 @@ def _load_local_env(path: Path) -> None:
 
 _load_local_env(Path(__file__).resolve().with_name(".env"))
 
+import brief_lab
 import image_slicer
 import pipeline
 from comfyui_client import comfyui_configured, remove_background
@@ -1245,9 +1246,491 @@ def download_slicer_run(run_id: str) -> FileResponse:
     return FileResponse(archive, media_type="application/zip", filename=f"{run_id}-tiles.zip")
 
 
+# ---------------------------------------------------------------------------
+# 创新简报实验室（/brief）：VLM 图→文→图实验，独立于主链路，逻辑在 brief_lab.py。
+# ---------------------------------------------------------------------------
+
+BRIEF_DIR = APP_DIR / "brief_runs"
+_brief_lock = threading.RLock()
+
+
+def _brief_prompt_config_path() -> Path:
+    return BRIEF_DIR / "prompt-defaults.json"
+
+
+def _load_brief_prompt_config() -> dict[str, Any]:
+    base_parts = brief_lab.default_brief_prompt_parts()
+    base_styles = brief_lab.brief_prompt_styles()
+    config: dict[str, Any] = {
+        "innovation_prompt": brief_lab.innovation_prompt(),
+        "core_prompt": base_parts["core_prompt"],
+        "product_prompt": base_parts["product_prompt"],
+        "layouts": {item["id"]: item["text"] for item in base_styles},
+    }
+    path = _brief_prompt_config_path()
+    if path.is_file():
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            for key in ("innovation_prompt", "core_prompt", "product_prompt"):
+                if isinstance(saved.get(key), str):
+                    config[key] = saved[key]
+            if isinstance(saved.get("layouts"), dict):
+                for style_id in config["layouts"]:
+                    value = saved["layouts"].get(style_id)
+                    if isinstance(value, str):
+                        config["layouts"][style_id] = value
+        except (OSError, ValueError, TypeError):
+            pass
+    return config
+
+
+def _save_brief_prompt_config(config: dict[str, Any]) -> None:
+    with _brief_lock:
+        _save_json_with_unique_temp(_brief_prompt_config_path(), config)
+
+
+def _public_brief_prompt_config() -> dict[str, Any]:
+    config = _load_brief_prompt_config()
+    styles = brief_lab.brief_prompt_styles()
+    for item in styles:
+        item["text"] = config["layouts"].get(item["id"], item["text"])
+    default_style = brief_lab.DEFAULT_BRIEF_LAYOUT
+    return {
+        "innovation_prompt": config["innovation_prompt"],
+        "styles": styles,
+        "defaults": {
+            "core_prompt": config["core_prompt"],
+            "product_prompt": config["product_prompt"],
+            "prompt_style": default_style,
+            "layout_prompt": config["layouts"][default_style],
+            "canvas_id": brief_lab.DEFAULT_BRIEF_CANVAS,
+        },
+    }
+
+
+def _resolve_brief_compose_defaults(
+    prompt_style: str,
+    core_prompt: str | None,
+    product_prompt: str | None,
+    layout_prompt: str | None,
+) -> dict[str, Any]:
+    saved = _load_brief_prompt_config()
+    return {
+        "core_prompt": saved["core_prompt"] if core_prompt is None else core_prompt,
+        "product_prompt": saved["product_prompt"] if product_prompt is None else product_prompt,
+        "layout_prompt": saved["layouts"].get(prompt_style) if layout_prompt is None else layout_prompt,
+    }
+
+
+def _brief_meta_path(run_id: str) -> Path:
+    return BRIEF_DIR / run_id / "meta.json"
+
+
+def _require_brief_run(run_id: str) -> Path:
+    if not re.fullmatch(r"brief-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}", run_id):
+        raise HTTPException(status_code=400, detail="无效的简报任务 ID")
+    directory = BRIEF_DIR / run_id
+    if not directory.is_dir():
+        raise HTTPException(status_code=404, detail="简报任务不存在")
+    return directory
+
+
+def _load_brief_meta(run_id: str) -> dict[str, Any]:
+    with _brief_lock:
+        return json.loads(_brief_meta_path(run_id).read_text(encoding="utf-8"))
+
+
+def _save_brief_meta(run_id: str, meta: dict[str, Any]) -> None:
+    with _brief_lock:
+        _save_json_with_unique_temp(_brief_meta_path(run_id), meta)
+
+
+def _brief_payload(run_id: str) -> dict[str, Any]:
+    meta = _load_brief_meta(run_id)
+    meta["id"] = run_id
+    meta["source_url"] = f"/api/brief/{run_id}/files/{meta.get('source_file', '')}"
+    for direction in meta.get("directions", []):
+        direction["image_urls"] = [
+            f"/api/brief/{run_id}/files/{name}" for name in direction.get("images", [])
+        ]
+        if direction.get("last_prompt_file"):
+            direction["last_prompt_url"] = (
+                f"/api/brief/{run_id}/files/{direction['last_prompt_file']}"
+            )
+    return meta
+
+
+def _run_brief_vlm(run_id: str) -> None:
+    directory = BRIEF_DIR / run_id
+    meta = _load_brief_meta(run_id)
+    meta["status"] = "briefing"
+    _save_brief_meta(run_id, meta)
+    try:
+        result = brief_lab.call_vlm(
+            directory / meta["source_file"],
+            prompt=meta.get("innovation_prompt"),
+        )
+        if result is None:
+            # 全部模型失败：兜底为“默认创新提示词 + 参考图 图生图”的单方向。
+            meta["status"] = "ready"
+            meta["vlm_model"] = None
+            meta["fallback"] = True
+            meta["summary"] = "VLM 全部模型失败，已提供兜底默认创新提示词（生成时将附带参考图）。"
+            meta["directions"] = [{
+                "index": 1,
+                "direction": "兜底：默认创新提示词 + 参考图",
+                "prompt": brief_lab.FALLBACK_PROMPT,
+                "status": "idle",
+                "images": [],
+            }]
+        else:
+            model, content = result
+            (directory / "brief.md").write_text(content, encoding="utf-8")
+            parsed = brief_lab.parse_brief(content)
+            meta["status"] = "ready"
+            meta["vlm_model"] = model
+            meta["fallback"] = False
+            meta["summary"] = parsed["summary"]
+            meta["directions"] = [
+                {**item, "status": "idle", "images": []}
+                for item in parsed["directions"]
+            ]
+    except Exception as exc:  # noqa: BLE001
+        meta["status"] = "failed"
+        meta["error"] = str(exc)[:500]
+    _save_brief_meta(run_id, meta)
+
+
+def _run_brief_generate(run_id: str, index: int, prompt: str, compose: dict[str, Any]) -> None:
+    directory = BRIEF_DIR / run_id
+    meta = _load_brief_meta(run_id)
+    direction = next((item for item in meta["directions"] if item["index"] == index), None)
+    if direction is None:
+        return
+    try:
+        full_prompt, spec = brief_lab.compose_generation_prompt(
+            prompt,
+            compose.get("prompt_style", brief_lab.DEFAULT_BRIEF_LAYOUT),
+            compose,
+        )
+        reference_url = None
+        if meta.get("fallback"):
+            reference_url = brief_lab.upload_reference(directory / meta["source_file"])
+        stamp = datetime.now().strftime("%H%M%S")
+        out_name = f"derived-{index}-{stamp}.png"
+        (directory / f"derived-{index}-{stamp}-prompt.txt").write_text(full_prompt, encoding="utf-8")
+        result = brief_lab.generate_image(
+            full_prompt,
+            spec["generation_size"],
+            directory / out_name,
+            reference_url=reference_url,
+        )
+        meta = _load_brief_meta(run_id)
+        direction = next(item for item in meta["directions"] if item["index"] == index)
+        if result.get("ok"):
+            direction["status"] = "done"
+            direction["images"] = direction.get("images", []) + [out_name]
+            direction["last_prompt_file"] = f"derived-{index}-{stamp}-prompt.txt"
+            direction["config_label"] = (
+                f"{brief_lab.BRIEF_LAYOUT_LABELS.get(compose.get('prompt_style'), compose.get('prompt_style'))}"
+                f" · {spec['label']} · {spec['generation_size']}"
+            )
+            direction["error"] = None
+        else:
+            direction["status"] = "failed"
+            direction["error"] = result.get("error")
+    except Exception as exc:  # noqa: BLE001
+        meta = _load_brief_meta(run_id)
+        direction = next(item for item in meta["directions"] if item["index"] == index)
+        direction["status"] = "failed"
+        direction["error"] = str(exc)[:500]
+    _save_brief_meta(run_id, meta)
+
+
+def _process_brief_run(run_id: str, auto_generate: bool, compose: dict[str, Any]) -> None:
+    _run_brief_vlm(run_id)
+    if not auto_generate:
+        return
+    meta = _load_brief_meta(run_id)
+    if meta.get("status") != "ready":
+        return
+    for direction in list(meta.get("directions", [])):
+        current = _load_brief_meta(run_id)
+        item = next((entry for entry in current["directions"] if entry["index"] == direction["index"]), None)
+        if item is None:
+            continue
+        item["status"] = "generating"
+        _save_brief_meta(run_id, current)
+        _run_brief_generate(run_id, direction["index"], direction["prompt"], compose)
+
+
+def _run_brief_batch(run_ids: list[str], auto_generate: bool, compose: dict[str, Any]) -> None:
+    """批量串行处理：一次一张，避免并发打爆 VLM 和生图网关。"""
+    for run_id in run_ids:
+        try:
+            _process_brief_run(run_id, auto_generate, compose)
+        except Exception as exc:  # noqa: BLE001
+            try:
+                meta = _load_brief_meta(run_id)
+                meta["status"] = "failed"
+                meta["error"] = str(exc)[:500]
+                _save_brief_meta(run_id, meta)
+            except Exception:
+                continue
+
+
+def _create_brief_run_record(
+    file_name: str,
+    content: bytes,
+    status: str,
+    innovation_prompt_text: str | None = None,
+) -> str:
+    run_id = f"brief-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    directory = BRIEF_DIR / run_id
+    directory.mkdir(parents=True, exist_ok=True)
+    suffix = Path(file_name).suffix.lower()
+    source_file = f"source{suffix}"
+    (directory / source_file).write_bytes(content)
+    _save_brief_meta(run_id, {
+        "created_at": now_iso(),
+        "source_name": file_name,
+        "source_file": source_file,
+        "innovation_prompt": (
+            innovation_prompt_text or _load_brief_prompt_config()["innovation_prompt"]
+        ).strip(),
+        "status": status,
+        "summary": "",
+        "directions": [],
+    })
+    return run_id
+
+
+@app.get("/brief")
+def brief_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "brief.html")
+
+
+@app.get("/api/brief")
+def list_brief_runs() -> list[dict[str, Any]]:
+    if not BRIEF_DIR.is_dir():
+        return []
+    runs = []
+    for path in sorted(BRIEF_DIR.glob("brief-*/meta.json"), reverse=True)[:20]:
+        try:
+            runs.append(_brief_payload(path.parent.name))
+        except Exception:
+            continue
+    return runs
+
+
+@app.get("/api/brief/{run_id}")
+def get_brief_run(run_id: str) -> dict[str, Any]:
+    _require_brief_run(run_id)
+    return _brief_payload(run_id)
+
+
+async def _read_brief_upload(file: UploadFile) -> tuple[str, bytes]:
+    file_name = file.filename or "upload.png"
+    suffix = Path(file_name).suffix.lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        raise HTTPException(status_code=400, detail=f"{file_name} 不是支持的图片格式")
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"{file_name} 超过 20 MB")
+    _validate_upload_bytes(content, "source")
+    return file_name, content
+
+
+@app.post("/api/brief")
+async def create_brief_run(
+    file: UploadFile = File(...),
+    innovation_prompt: str | None = Form(None),
+) -> dict[str, Any]:
+    file_name, content = await _read_brief_upload(file)
+    run_id = _create_brief_run_record(file_name, content, "briefing", innovation_prompt)
+    threading.Thread(target=_run_brief_vlm, args=(run_id,), daemon=True).start()
+    return _brief_payload(run_id)
+
+
+@app.post("/api/brief/batch")
+async def create_brief_batch(
+    files: list[UploadFile] = File(...),
+    auto_generate: bool = Form(True),
+    prompt_style: str = Form(brief_lab.DEFAULT_BRIEF_LAYOUT),
+    canvas_id: str = Form(brief_lab.DEFAULT_BRIEF_CANVAS),
+    core_prompt: str | None = Form(None),
+    product_prompt: str | None = Form(None),
+    layout_prompt: str | None = Form(None),
+    innovation_prompt: str | None = Form(None),
+) -> dict[str, Any]:
+    if not files:
+        raise HTTPException(status_code=400, detail="请至少上传一张图片")
+    saved_compose = _resolve_brief_compose_defaults(
+        prompt_style, core_prompt, product_prompt, layout_prompt,
+    )
+    compose = {
+        "prompt_style": prompt_style,
+        "canvas_id": canvas_id,
+        **saved_compose,
+    }
+    if auto_generate:
+        try:
+            brief_lab.compose_generation_prompt("配置校验", prompt_style, compose)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    uploads = [await _read_brief_upload(file) for file in files]
+    run_ids = [
+        _create_brief_run_record(file_name, content, "queued", innovation_prompt)
+        for file_name, content in uploads
+    ]
+    threading.Thread(
+        target=_run_brief_batch,
+        args=(run_ids, auto_generate, compose),
+        daemon=True,
+    ).start()
+    return {"ids": run_ids, "total": len(run_ids), "auto_generate": auto_generate}
+
+
+class BriefGenerateRequest(BaseModel):
+    index: int
+    prompt: str
+    prompt_style: str = brief_lab.DEFAULT_BRIEF_LAYOUT
+    canvas_id: str = brief_lab.DEFAULT_BRIEF_CANVAS
+    core_prompt: str | None = None
+    product_prompt: str | None = None
+    layout_prompt: str | None = None
+
+
+class BriefPromptPreviewRequest(BaseModel):
+    prompt: str
+    prompt_style: str = brief_lab.DEFAULT_BRIEF_LAYOUT
+    canvas_id: str = brief_lab.DEFAULT_BRIEF_CANVAS
+    core_prompt: str | None = None
+    product_prompt: str | None = None
+    layout_prompt: str | None = None
+
+
+class BriefPromptDefaultSaveRequest(BaseModel):
+    field: Literal["innovation_prompt", "core_prompt", "product_prompt", "layout_prompt"]
+    value: str
+    prompt_style: str | None = None
+
+
+class BriefDirectionPromptSaveRequest(BaseModel):
+    prompt: str
+
+
+@app.patch("/api/brief/prompts/defaults")
+def save_brief_prompt_default(request: BriefPromptDefaultSaveRequest) -> dict[str, Any]:
+    value = request.value.strip()
+    if request.field != "product_prompt" and not value:
+        raise HTTPException(status_code=400, detail="该 Prompt 不能为空")
+    config = _load_brief_prompt_config()
+    if request.field == "layout_prompt":
+        style_id = (request.prompt_style or "").strip()
+        if style_id not in config["layouts"]:
+            raise HTTPException(status_code=400, detail="未知版式，无法保存 Prompt")
+        config["layouts"][style_id] = value
+    else:
+        config[request.field] = value
+    config["updated_at"] = now_iso()
+    _save_brief_prompt_config(config)
+    return {"ok": True, **_public_brief_prompt_config()}
+
+
+@app.patch("/api/brief/{run_id}/directions/{index}")
+def save_brief_direction_prompt(
+    run_id: str,
+    index: int,
+    request: BriefDirectionPromptSaveRequest,
+) -> dict[str, Any]:
+    _require_brief_run(run_id)
+    prompt = request.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="内容简报不能为空")
+    meta = _load_brief_meta(run_id)
+    direction = next((item for item in meta.get("directions", []) if item["index"] == index), None)
+    if direction is None:
+        raise HTTPException(status_code=404, detail="衍生方向不存在")
+    if direction.get("status") == "generating":
+        raise HTTPException(status_code=409, detail="该方向正在生成，暂时不能保存")
+    direction["prompt"] = prompt
+    _save_brief_meta(run_id, meta)
+    return _brief_payload(run_id)
+
+
+@app.post("/api/brief/prompts/preview")
+def preview_brief_prompt(request: BriefPromptPreviewRequest) -> dict[str, Any]:
+    saved_compose = _resolve_brief_compose_defaults(
+        request.prompt_style,
+        request.core_prompt,
+        request.product_prompt,
+        request.layout_prompt,
+    )
+    compose = {
+        **saved_compose,
+        "canvas_id": request.canvas_id,
+    }
+    try:
+        return brief_lab.assemble_generation_prompt(request.prompt, request.prompt_style, compose)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/brief/{run_id}/generate")
+def generate_brief_direction(run_id: str, request: BriefGenerateRequest) -> dict[str, Any]:
+    _require_brief_run(run_id)
+    meta = _load_brief_meta(run_id)
+    direction = next((item for item in meta["directions"] if item["index"] == request.index), None)
+    if direction is None:
+        raise HTTPException(status_code=404, detail="方向不存在")
+    if direction.get("status") == "generating":
+        raise HTTPException(status_code=409, detail="该方向正在生成中")
+    prompt = request.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="提示词不能为空")
+    saved_compose = _resolve_brief_compose_defaults(
+        request.prompt_style,
+        request.core_prompt,
+        request.product_prompt,
+        request.layout_prompt,
+    )
+    compose = {
+        "prompt_style": request.prompt_style,
+        "canvas_id": request.canvas_id,
+        **saved_compose,
+    }
+    try:
+        # 组装先验证一遍，配置错误立刻 400 而不是异步失败。
+        brief_lab.compose_generation_prompt(prompt, request.prompt_style, compose)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    direction["prompt"] = prompt
+    direction["status"] = "generating"
+    direction["error"] = None
+    _save_brief_meta(run_id, meta)
+    threading.Thread(
+        target=_run_brief_generate,
+        args=(run_id, request.index, prompt, compose),
+        daemon=True,
+    ).start()
+    return _brief_payload(run_id)
+
+
+@app.get("/api/brief/{run_id}/files/{file_path:path}")
+def get_brief_file(run_id: str, file_path: str) -> FileResponse:
+    directory = _require_brief_run(run_id).resolve()
+    target = (directory / file_path).resolve()
+    if directory not in target.parents or not target.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    media_type, _ = mimetypes.guess_type(target.name)
+    return FileResponse(target, media_type=media_type)
+
+
 @app.get("/api/defaults")
 def defaults() -> dict[str, Any]:
     settings = pipeline.default_settings()
+    brief_prompts = _public_brief_prompt_config()
     return {
         "settings": settings,
         "generation_prompt": compose_base_prompt(),
@@ -1256,6 +1739,10 @@ def defaults() -> dict[str, Any]:
             {**style, "text": compose_base_prompt(style["id"])}
             for style in list_prompt_styles()
         ],
+        "brief_prompt_styles": brief_prompts["styles"],
+        "brief_prompt_defaults": brief_prompts["defaults"],
+        "brief_innovation_prompt": brief_prompts["innovation_prompt"],
+        "brief_default_canvas_id": brief_lab.DEFAULT_BRIEF_CANVAS,
         "default_prompt_style": settings.get("prompt_style", "scene"),
         "window_templates": public_window_templates(),
         "window_frames": public_window_frames(),

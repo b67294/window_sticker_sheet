@@ -201,7 +201,7 @@ def main() -> None:
     source_copy.write_bytes(args.image.read_bytes())
     log(f"输入: {args.image}")
 
-    innovation_prompt = (HERE / "innovation_prompt.md").read_text(encoding="utf-8-sig")
+    innovation_prompt = (HERE.parent.parent / "prompts" / "brief" / "innovation.md").read_text(encoding="utf-8-sig")
     data_url = image_data_url(args.image)
     vlm_result = call_vlm(token, innovation_prompt, data_url, log)
 

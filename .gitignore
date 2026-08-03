@@ -6,3 +6,4 @@ runs/*
 *.zip
 slicer_runs/
 experiments/vlm_brief/runs/
+brief_runs/

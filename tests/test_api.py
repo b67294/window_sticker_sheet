@@ -618,3 +618,196 @@ def test_batch_full_mode_requires_comfyui(tmp_path, monkeypatch):
         files=[("files", ("a.png", upload_bytes(), "image/png"))],
     )
     assert response.status_code == 409
+
+
+def test_brief_lab_flow(tmp_path, monkeypatch):
+    monkeypatch.setattr(webapp, "BRIEF_DIR", tmp_path / "brief_runs")
+
+    class InlineThread:
+        def __init__(self, target, args=(), daemon=None):
+            self.target = target
+            self.args = args
+        def start(self):
+            self.target(*self.args)
+
+    monkeypatch.setattr(webapp.threading, "Thread", InlineThread)
+    received_prompts = []
+
+    def fake_vlm(path, log=print, prompt=None):
+        received_prompts.append(prompt)
+        return ("codex-gpt-5.6-luna",
+            "【反推重点】\n主角为测试雪人\n"
+            "【衍生方向 1】\n方向一\n【生图提示词 1】\n提示词一\n"
+            "【衍生方向 2】\n方向二\n【生图提示词 2】\n提示词二\n"
+            "【衍生方向 3】\n方向三\n【生图提示词 3】\n提示词三")
+
+    monkeypatch.setattr(webapp.brief_lab, "call_vlm", fake_vlm)
+
+    def fake_generate(prompt, size, out_path, log=print, reference_url=None):
+        # 创新简报五段组装：通用底线 / 空产品约束 / 版式 / 内容简报 / 画布规格。
+        assert "主题表达不变" in prompt
+        assert "【3 版式 · 大元素】" in prompt
+        assert "【4 内容简报】" in prompt
+        assert "【5 规格 · 1:1 方形】" in prompt
+        assert "当前窗户模板硬约束" not in prompt
+        assert "中间6%分隔带" not in prompt
+        assert size == "1216x1216"
+        out_path.write_bytes(b"fake-png")
+        return {"ok": True, "image_url": "https://example/x.png"}
+
+    monkeypatch.setattr(webapp.brief_lab, "generate_image", fake_generate)
+    client = TestClient(webapp.app)
+
+    response = client.post(
+        "/api/brief",
+        data={"innovation_prompt": "用户编辑后的创新反推提示词"},
+        files={"file": ("s.png", upload_bytes(), "image/png")},
+    )
+    assert response.status_code == 200
+    assert received_prompts == ["用户编辑后的创新反推提示词"]
+    run_id = response.json()["id"]
+
+    state = client.get(f"/api/brief/{run_id}").json()
+    assert state["status"] == "ready"
+    assert state["vlm_model"] == "codex-gpt-5.6-luna"
+    assert state["summary"] == "主角为测试雪人"
+    assert [item["index"] for item in state["directions"]] == [1, 2, 3]
+
+    generated = client.post(
+        f"/api/brief/{run_id}/generate",
+        json={"index": 2, "prompt": "人工改过的提示词二"},
+    )
+    assert generated.status_code == 200
+    state = client.get(f"/api/brief/{run_id}").json()
+    direction = next(item for item in state["directions"] if item["index"] == 2)
+    assert direction["status"] == "done"
+    assert direction["prompt"] == "人工改过的提示词二"
+    assert len(direction["image_urls"]) == 1
+    assert client.get(direction["image_urls"][0]).status_code == 200
+    assert client.get("/api/brief").json()[0]["id"] == run_id
+
+
+def test_brief_batch_flow(tmp_path, monkeypatch):
+    monkeypatch.setattr(webapp, "BRIEF_DIR", tmp_path / "brief_runs")
+
+    class InlineThread:
+        def __init__(self, target, args=(), daemon=None):
+            self.target = target
+            self.args = args
+        def start(self):
+            self.target(*self.args)
+
+    monkeypatch.setattr(webapp.threading, "Thread", InlineThread)
+    monkeypatch.setattr(
+        webapp.brief_lab, "call_vlm",
+        lambda path, log=print, prompt=None: ("codex-gpt-5.6-luna",
+            "【反推重点】\n要点\n"
+            "【衍生方向 1】\n甲\n【生图提示词 1】\n提示甲\n"
+            "【衍生方向 2】\n乙\n【生图提示词 2】\n提示乙\n"
+            "【衍生方向 3】\n丙\n【生图提示词 3】\n提示丙"),
+    )
+    sizes = []
+
+    def fake_generate(prompt, size, out_path, log=print, reference_url=None):
+        sizes.append(size)
+        assert "【4 内容简报】" in prompt
+        out_path.write_bytes(b"fake")
+        return {"ok": True}
+
+    monkeypatch.setattr(webapp.brief_lab, "generate_image", fake_generate)
+    client = TestClient(webapp.app)
+    response = client.post(
+        "/api/brief/batch",
+        data={
+            "auto_generate": "true",
+            "prompt_style": "large_elements",
+            "canvas_id": "87:73",
+        },
+        files=[
+            ("files", ("a.png", upload_bytes(), "image/png")),
+            ("files", ("b.png", upload_bytes(), "image/png")),
+        ],
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+
+    for run_id in payload["ids"]:
+        state = client.get(f"/api/brief/{run_id}").json()
+        assert state["status"] == "ready"
+        assert all(item["status"] == "done" for item in state["directions"])
+        assert all(len(item["image_urls"]) == 1 for item in state["directions"])
+        assert "大元素" in state["directions"][0]["config_label"]
+        assert state["directions"][0]["last_prompt_url"].endswith("-prompt.txt")
+    assert sizes and all(size == "1392x1168" for size in sizes)
+
+
+def test_brief_prompt_preview_is_visible_five_part_composition():
+    client = TestClient(webapp.app)
+    defaults = client.get("/api/defaults").json()
+    assert [item["id"] for item in defaults["brief_prompt_styles"]] == [
+        "large_elements", "small_scatter",
+    ]
+    assert defaults["brief_prompt_defaults"]["product_prompt"] == ""
+    assert defaults["brief_prompt_defaults"]["core_prompt"]
+    assert defaults["brief_prompt_defaults"]["layout_prompt"]
+    assert "【反推重点】" in defaults["brief_innovation_prompt"]
+
+    response = client.post(
+        "/api/brief/prompts/preview",
+        json={
+            "prompt": "测试内容简报",
+            "prompt_style": "small_scatter",
+            "canvas_id": "3:4",
+            "core_prompt": "测试通用底线",
+            "product_prompt": "",
+            "layout_prompt": "测试满铺版式",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["id"] for item in payload["sections"]] == [
+        "core", "product", "layout", "content", "spec",
+    ]
+    assert "测试通用底线" in payload["prompt"]
+    assert "测试满铺版式" in payload["prompt"]
+    assert "测试内容简报" in payload["prompt"]
+    assert "【2 产品约束】\n（无）" in payload["prompt"]
+    assert "宽3:高4" in payload["prompt"]
+    assert "分栏" not in payload["prompt"]
+
+
+def test_brief_prompt_defaults_and_direction_can_be_saved(tmp_path, monkeypatch):
+    monkeypatch.setattr(webapp, "BRIEF_DIR", tmp_path / "brief_runs")
+    client = TestClient(webapp.app)
+
+    saved = client.patch(
+        "/api/brief/prompts/defaults",
+        json={"field": "core_prompt", "value": "永久通用底线"},
+    )
+    assert saved.status_code == 200
+    saved = client.patch(
+        "/api/brief/prompts/defaults",
+        json={
+            "field": "layout_prompt",
+            "value": "永久满铺版式",
+            "prompt_style": "small_scatter",
+        },
+    )
+    assert saved.status_code == 200
+    defaults = client.get("/api/defaults").json()
+    assert defaults["brief_prompt_defaults"]["core_prompt"] == "永久通用底线"
+    assert next(
+        item for item in defaults["brief_prompt_styles"] if item["id"] == "small_scatter"
+    )["text"] == "永久满铺版式"
+
+    run_id = webapp._create_brief_run_record("a.png", upload_bytes(), "ready")
+    meta = webapp._load_brief_meta(run_id)
+    meta["directions"] = [{"index": 1, "prompt": "旧简报", "status": "idle", "images": []}]
+    webapp._save_brief_meta(run_id, meta)
+    response = client.patch(
+        f"/api/brief/{run_id}/directions/1",
+        json={"prompt": "永久保存后的内容简报"},
+    )
+    assert response.status_code == 200
+    assert response.json()["directions"][0]["prompt"] == "永久保存后的内容简报"
