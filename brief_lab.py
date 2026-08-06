@@ -18,24 +18,63 @@ import requests
 from PIL import Image
 
 from generation import PROMPTS_DIR, list_prompt_styles
-from window_templates import get_canvas
+from window_templates import get_canvas, get_frame, public_window_frames
 
 APP_DIR = Path(__file__).resolve().parent
 INNOVATION_PROMPT_PATH = APP_DIR / "prompts" / "brief" / "innovation.md"
-BRIEF_LAYOUT_IDS = ("large_elements", "small_scatter")
+BRIEF_LAYOUT_IDS = (
+    "large_elements",
+    "scene",
+    "white_silhouette_scene",
+    "small_scatter",
+)
 BRIEF_LAYOUT_LABELS = {
     "large_elements": "大元素",
-    "small_scatter": "满铺",
+    "scene": "场景式",
+    "small_scatter": "小元素满铺",
+    "white_silhouette_scene": "白色剪影场景",
 }
 DEFAULT_BRIEF_LAYOUT = "large_elements"
 DEFAULT_BRIEF_CANVAS = "1:1"
+DEFAULT_BRIEF_FRAME = "pane1"
+
+
+def brief_frames() -> list[dict[str, Any]]:
+    """分栏骨架选项：几何参数来自 window_templates，约束文本来自 frames/*.md（热加载）。"""
+    return public_window_frames()
 
 CHAT_URL = "https://test-plugin.longpean.com/v1/chat/completions"
 IMAGE_URL = "https://gptapi.longpean.com/gptImage/generateImageDirect"
 UPLOAD_URL = "https://stpic.longpean.com/picture/upLoadQiNiu"
 
-# luna 重试 2 次（共 3 attempts），然后依次回退 sol / terra / gpt-4o。
-VLM_CHAIN = ["codex-gpt-5.6-luna"] * 3 + ["codex-gpt-5.6-sol", "codex-gpt-5.6-terra", "gpt-4o"]
+# 模型链（按顺序尝试，可用 LP_BRIEF_VLM_MODELS 覆盖，逗号分隔）。
+# 2026-08-06 实测：codex-gpt-5.6-* 全部 502（网关 Codex CLI 版本过旧，报
+# "requires a newer version of Codex"），故默认链改用已验证可用的 5.5 与 gpt-4o；
+# 末位保留一次 5.6-luna 探测，网关修复后无需改代码即可自动恢复使用。
+DEFAULT_VLM_CHAIN = [
+    "codex-gpt-5.5",
+    "codex-gpt-5.5",
+    "gpt-4o",
+    "gpt-4o",
+    "codex-gpt-5.6-luna",
+]
+
+
+class VLMChainError(RuntimeError):
+    """整条模型链都失败；消息里带每个模型的原始报错，便于页面直接展示。"""
+
+
+def vlm_chain() -> list[str]:
+    configured = os.getenv("LP_BRIEF_VLM_MODELS", "").strip()
+    if configured:
+        models = [item.strip() for item in configured.split(",") if item.strip()]
+        if models:
+            return models
+    return list(DEFAULT_VLM_CHAIN)
+
+
+# 兼容旧引用；实际调用请用 vlm_chain()。
+VLM_CHAIN = DEFAULT_VLM_CHAIN
 
 # 独立脚本（experiments/vlm_brief）用的简化生产约束；实验页走五段式可见组装。
 PRODUCTION_SUFFIX = (
@@ -52,6 +91,26 @@ FALLBACK_PROMPT = (
     "次级配色和构图必须至少四处明显不同，像同一系列的另一款产品而不是原图改版。"
 )
 
+# VLM 失败时仍然给出三个各有侧重的方向，保证"一张输入 = 三个衍生方向"的预期不变。
+FALLBACK_DIRECTIONS = [
+    ("兜底 · 换主体动作与道具", "本款重点改变主角的动作姿态、道具组合与配件细节，构图与场景保持同类但不照搬。"),
+    ("兜底 · 换场景与背景主题", "本款重点改变背景主题与场景元素，把主角放进同一节日下的另一处情境。"),
+    ("兜底 · 换构图与色彩氛围", "本款重点改变构图布局、大小层级与配色氛围，形成与原图明显不同的视觉节奏。"),
+]
+
+
+def fallback_directions() -> list[dict[str, Any]]:
+    return [
+        {
+            "index": index,
+            "direction": label,
+            "prompt": f"{FALLBACK_PROMPT}{extra}",
+            "status": "idle",
+            "images": [],
+        }
+        for index, (label, extra) in enumerate(FALLBACK_DIRECTIONS, start=1)
+    ]
+
 
 def _read_prompt(path: Path) -> str:
     if not path.is_file():
@@ -60,7 +119,7 @@ def _read_prompt(path: Path) -> str:
 
 
 def brief_prompt_styles() -> list[dict[str, str]]:
-    """创新简报实验室只保留“大元素 / 满铺”两个版式。"""
+    """返回创新简报实验室可见且可单独保存的版式。"""
     styles = {item["id"]: item for item in list_prompt_styles()}
     result = []
     for style_id in BRIEF_LAYOUT_IDS:
@@ -80,6 +139,8 @@ def default_brief_prompt_parts() -> dict[str, Any]:
         "product_prompt": "",
         "prompt_style": DEFAULT_BRIEF_LAYOUT,
         "layout_prompt": styles[DEFAULT_BRIEF_LAYOUT]["text"],
+        "frame_id": DEFAULT_BRIEF_FRAME,
+        "frame_prompt": get_frame(DEFAULT_BRIEF_FRAME)["prompt_constraint"],
         "canvas_id": DEFAULT_BRIEF_CANVAS,
     }
 
@@ -95,7 +156,7 @@ def brief_canvas_spec(canvas_id: str | None) -> dict[str, Any]:
     lines = [shape]
     if canvas.get("orientation_hint"):
         lines.append(canvas["orientation_hint"])
-    lines.append("本段只约束画布比例与构图方向。")
+    lines.append("本段只约束分栏结构、画布比例与构图方向，不新增题材内容。")
     return {
         "id": canvas["id"],
         "label": canvas["label"],
@@ -110,7 +171,7 @@ def assemble_generation_prompt(
     prompt_style: str = DEFAULT_BRIEF_LAYOUT,
     settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """按前端可见的五段组装，不追加任何隐藏 Prompt。"""
+    """按前端可见的五段组装，不追加任何隐藏 Prompt。第 5 段 = 分栏骨架 × 画布比例。"""
     settings = settings or {}
     styles = {item["id"]: item for item in brief_prompt_styles()}
     if prompt_style not in styles:
@@ -119,6 +180,7 @@ def assemble_generation_prompt(
     core_value = settings.get("core_prompt")
     product_value = settings.get("product_prompt")
     layout_value = settings.get("layout_prompt")
+    frame_value = settings.get("frame_prompt")
     core_prompt = str(defaults["core_prompt"] if core_value is None else core_value).strip()
     product_prompt = str(defaults["product_prompt"] if product_value is None else product_value).strip()
     layout_prompt = str(styles[prompt_style]["text"] if layout_value is None else layout_value).strip()
@@ -129,13 +191,20 @@ def assemble_generation_prompt(
         raise ValueError("版式 Prompt 不能为空")
     if not content_prompt:
         raise ValueError("内容简报不能为空")
+    frame = get_frame(str(settings.get("frame_id") or DEFAULT_BRIEF_FRAME).strip())
+    frame_prompt = str(frame["prompt_constraint"] if frame_value is None else frame_value).strip()
+    if not frame_prompt:
+        raise ValueError("分栏骨架 Prompt 不能为空")
     spec = brief_canvas_spec(settings.get("canvas_id"))
+    spec["frame_id"] = frame["id"]
+    spec["frame_label"] = frame["label"]
+    spec_text = f"{frame_prompt}\n{spec['prompt_constraint']}"
     sections = [
         {"id": "core", "label": "1 通用底线", "text": core_prompt},
         {"id": "product", "label": "2 产品约束", "text": product_prompt},
         {"id": "layout", "label": f"3 版式 · {styles[prompt_style]['label']}", "text": layout_prompt},
         {"id": "content", "label": "4 内容简报", "text": content_prompt},
-        {"id": "spec", "label": f"5 规格 · {spec['label']}", "text": spec["prompt_constraint"]},
+        {"id": "spec", "label": f"5 规格 · {frame['label']} × {spec['label']}", "text": spec_text},
     ]
     prompt = "\n\n".join(
         f"【{section['label']}】\n{section['text'] or '（无）'}"
@@ -191,9 +260,11 @@ def call_vlm(
     if not prompt:
         raise ValueError("创新反推 Prompt 不能为空")
     data_url = image_data_url(image_path)
-    for index, model in enumerate(VLM_CHAIN, start=1):
+    chain = vlm_chain()
+    errors: list[str] = []
+    for index, model in enumerate(chain, start=1):
         try:
-            log(f"[VLM] attempt {index}/{len(VLM_CHAIN)} model={model}")
+            log(f"[VLM] attempt {index}/{len(chain)} model={model}")
             response = requests.post(
                 CHAT_URL,
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
@@ -217,9 +288,12 @@ def call_vlm(
                 raise RuntimeError("响应缺少期望的定界符")
             return model, content
         except Exception as exc:  # noqa: BLE001 - 实验链路，逐级回退
-            log(f"[VLM] {model} 失败: {exc}")
+            message = f"{model}: {str(exc)[:200]}"
+            errors.append(message)
+            log(f"[VLM] 失败 {message}")
             time.sleep(3)
-    return None
+    # 把逐个模型的失败原因带出去，便于页面直接显示而不必翻服务日志。
+    raise VLMChainError("VLM 全部模型失败：" + "；".join(errors))
 
 
 def parse_brief(content: str) -> dict[str, Any]:

@@ -8,8 +8,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
+
+FRAMES_DIR = Path(__file__).resolve().parent / "prompts" / "products" / "window_sticker" / "frames"
 
 DEFAULT_WINDOW_TEMPLATE = "double"
 TEMPLATE_CONSTRAINT_VERSION = "window-template-v2"
@@ -49,41 +52,9 @@ CANVAS_RATIOS: dict[str, dict[str, Any]] = {
 
 
 FRAMES: dict[str, dict[str, Any]] = {
-    "pane1": {
-        "id": "pane1",
-        "label": "1栏 · 无分隔带",
-        "pane_count": 1,
-        "gap_ratio": 0.0,
-        "prompt_constraint": (
-            "对应一个连续的单栏安装区域。禁止生成贯穿全高的中央纯白分隔带，"
-            "禁止强行左右对称或拆成多个独立窗格。主体和组合模块可以跨越画面中轴线，"
-            "应共同形成统一、完整、有层次的场景。"
-        ),
-    },
-    "pane2": {
-        "id": "pane2",
-        "label": "2栏 · 中间6%分隔带",
-        "pane_count": 2,
-        "gap_ratio": 0.06,
-        "prompt_constraint": (
-            "画面由左右两个竖向内容区组成，中间必须保留约占画布总宽度6%的、"
-            "从顶部贯穿到底部的连续纯白分隔带。任何图案、文字或装饰均不得跨越或侵入该分隔带。"
-            "左右每侧应分别形成窄长的竖窗构图，并各自具有从上到下的主次层级、视觉锚点和留白。"
-            "两侧主题与画风必须一致、视觉重量大致平衡，但不得机械镜像或简单复制。"
-        ),
-    },
-    "pane3": {
-        "id": "pane3",
-        "label": "3栏 · 两条5%分隔带",
-        "pane_count": 3,
-        "gap_ratio": 0.05,
-        "prompt_constraint": (
-            "画面由三个竖向内容区组成，相邻内容区之间必须各保留一条约占画布总宽度5%的、"
-            "从顶部贯穿到底部的连续纯白分隔带。任何图案、文字或装饰均不得跨越或侵入分隔带。"
-            "三栏各自形成窄长的竖窗构图、有自己的主次层级与留白；三栏主题与画风一致、"
-            "视觉重量大致平衡，不得机械镜像或简单复制。"
-        ),
-    },
+    "pane1": {"id": "pane1", "label": "1栏 · 无分隔带", "pane_count": 1, "gap_ratio": 0.0},
+    "pane2": {"id": "pane2", "label": "2栏 · 中间6%分隔带", "pane_count": 2, "gap_ratio": 0.06},
+    "pane3": {"id": "pane3", "label": "3栏 · 两条5%分隔带", "pane_count": 3, "gap_ratio": 0.05},
 }
 
 
@@ -147,10 +118,20 @@ _LEGACY_SPEC: dict[str, Any] = {
 }
 
 
+def _frame_constraint_text(frame_id: str) -> str:
+    path = FRAMES_DIR / f"{frame_id}.md"
+    if not path.is_file():
+        raise RuntimeError(f"缺少分栏骨架约束文件 {path}")
+    return path.read_text(encoding="utf-8-sig").strip()
+
+
 def get_frame(frame_id: str) -> dict[str, Any]:
+    """分栏骨架 = 代码里的几何参数 + prompts/.../frames/<id>.md 的约束文本（热加载）。"""
     if frame_id not in FRAMES:
         raise ValueError(f"未知分栏骨架：{frame_id!r}，可选值为 {', '.join(FRAMES)}")
-    return deepcopy(FRAMES[frame_id])
+    frame = deepcopy(FRAMES[frame_id])
+    frame["prompt_constraint"] = _frame_constraint_text(frame_id)
+    return frame
 
 
 def get_canvas(canvas_id: str) -> dict[str, Any]:
@@ -244,7 +225,7 @@ def public_window_templates() -> list[dict[str, Any]]:
 
 
 def public_window_frames() -> list[dict[str, Any]]:
-    return [deepcopy(FRAMES[key]) for key in FRAMES]
+    return [get_frame(key) for key in FRAMES]
 
 
 def public_canvas_ratios() -> list[dict[str, Any]]:

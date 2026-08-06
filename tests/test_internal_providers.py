@@ -36,15 +36,13 @@ def test_default_prompt_preserves_theme_innovates_and_builds_scene_modules():
     assert "至少四项明显变化" in prompt
     assert "不要一比一复刻" in prompt
     assert "主题表达不变" in prompt
-    assert "不要生成彼此无关" in prompt
     assert "模块内部可以合理接触" in prompt
     assert "不同模块之间必须留出" in prompt
     assert "具体画布比例与窗格结构" in prompt
     assert "左右双竖窗" not in prompt
     assert "【元素完整性】" in prompt
-    assert "【边缘互动】" in prompt
-    assert "探头、半身、局部进入" in prompt
-    assert "独立贴纸模块" in prompt
+    assert "场景空间骨架" in prompt
+    assert "贴好之后的窗户场景" in prompt
     assert "文字、面部、关键识别特征" in prompt
     assert "画布四周必须保留连续可见的纯白安全边距" in prompt
     assert "#ffffff" in prompt

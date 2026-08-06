@@ -56,11 +56,27 @@
     .final-prompt-head small { color: var(--muted); }
     .final-prompt-block textarea { min-height: 230px; font-size: 11px; line-height: 1.55; background: white; }
     .copy-prompt { padding: 6px 10px; }
+    .brief-batch-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .brief-batch-head h2 { margin: 0 0 5px; font-size: 18px; }
+    .brief-batch-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+    .brief-batch-actions button, .brief-batch-actions a { padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; color: var(--teal-dark); background: #f5fbfb; text-decoration: none; font-size: 12px; cursor: pointer; }
+    .brief-batch-actions .danger { color: #a33d31; border-color: #edc3bd; background: #fff5f3; }
+    .brief-batch-path { margin-top: 10px; padding: 8px 10px; color: var(--muted); border-radius: 8px; background: #f3f7f7; font: 11px/1.45 Consolas, monospace; word-break: break-all; }
+    .brief-batch-grid { display: grid; gap: 12px; }
+    .brief-batch-item { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 13px; padding: 12px; border: 1px solid var(--line); border-radius: 13px; background: white; }
+    .brief-batch-source img { width: 100%; height: 145px; object-fit: contain; border-radius: 9px; background: #edf3f4; }
+    .brief-batch-source strong { display: block; margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+    .brief-batch-item-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+    .brief-batch-images { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 9px; }
+    .brief-batch-image { min-height: 145px; display: grid; place-items: center; align-content: center; overflow: hidden; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: #f4f7f7; text-decoration: none; font-size: 11px; }
+    .brief-batch-image img { width: 100%; height: 170px; object-fit: contain; background: white; }
+    .brief-batch-image span { padding: 6px; }
     .spin { display: inline-block; animation: spin 1.2s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (max-width: 980px) {
       .brief-shell { grid-template-columns: 280px minmax(0, 1fr); }
       .prompt-part-grid { grid-template-columns: 1fr; }
+      .brief-batch-item { grid-template-columns: 110px minmax(0, 1fr); }
     }
   </style>
 </head>
@@ -93,13 +109,17 @@
         <button class="primary large" id="run" style="margin-top:10px">反推 + 出 3 个衍生方向 →</button>
         <small style="display:block;margin-top:8px;color:var(--muted)">
           单张：反推后人工审阅再生成。多张：排队串行"反推→自动生成"，用当前组装选项，结果进下方最近实验。
-          VLM：luna（重试2次）→ sol → terra → gpt-4o。
+          VLM 模型链：5.5 → 5.5 → 4o → 4o → 5.6-luna（探测）；可用 .env 的 LP_BRIEF_VLM_MODELS 覆盖。全挂时降级为兜底三方向并附参考图。
         </small>
         <div id="batch-status" style="margin-top:8px;color:var(--teal-dark);font-size:12px"></div>
       </div>
       <div class="panel-block">
         <div class="section-title"><span>02</span>最近实验</div>
         <div id="history"></div>
+        <div style="margin-top:10px;padding:8px;color:var(--muted);border-radius:8px;background:#eef5f5;font-size:10px;line-height:1.45;word-break:break-all">
+          历史文件本地目录：<br>F:\Longpean-AIGC\19-脚本代码\window_sticker_sheet_workbench\brief_runs
+          <br><a href="/api/brief/history/download" style="display:inline-block;margin-top:5px;color:var(--teal)">下载全部历史生成图 ZIP</a>
+        </div>
       </div>
     </aside>
 
@@ -108,7 +128,7 @@
         <div class="prompt-builder-head">
           <div>
             <h2>Prompt 组装器</h2>
-            <p>通用底线 + 产品约束 + 版式 + 每个方向的内容简报 + 画布比例规格</p>
+            <p>通用底线 + 产品约束 + 版式 + 每个方向的内容简报 + 规格（分栏骨架 × 画布比例）</p>
           </div>
           <small id="compose-info" style="color:var(--muted)"></small>
         </div>
@@ -129,14 +149,18 @@
             <textarea id="product-prompt" placeholder="无"></textarea>
           </div>
           <div class="prompt-part">
-            <label><span>3 版式</span><span><small>大元素 / 满铺</small> <button class="ghost prompt-save" data-save-prompt="layout_prompt">保存</button></span></label>
+            <label><span>3 版式</span><span><small>大元素 / 场景式 / 白色剪影场景 / 小元素满铺</small> <button class="ghost prompt-save" data-save-prompt="layout_prompt">保存</button></span></label>
             <select id="prompt-style"></select>
             <textarea id="layout-prompt"></textarea>
           </div>
           <div class="prompt-part">
-            <label><span>5 规格</span><small>只控制画布比例</small></label>
-            <select id="canvas-ratio"></select>
-            <textarea id="spec-prompt" readonly></textarea>
+            <label><span>5 规格 · 分栏 × 画布</span><span><small>分栏约束可编辑</small> <button class="ghost prompt-save" data-save-prompt="frame_prompt">保存</button></span></label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <select id="window-frame"></select>
+              <select id="canvas-ratio"></select>
+            </div>
+            <textarea id="frame-prompt"></textarea>
+            <textarea id="spec-prompt" readonly style="min-height:52px"></textarea>
           </div>
         </div>
         <small style="color:var(--muted)">第 4 段“内容简报”在每个衍生方向中单独编辑；其下方会显示该方向最终实际发送的合并 Prompt。</small>
@@ -154,6 +178,25 @@
           </div>
         </div>
         <div id="directions"></div>
+      </div>
+      <div id="batch-view" hidden>
+        <div class="brief-card">
+          <div class="brief-batch-head">
+            <div>
+              <h2 id="batch-title">批量任务</h2>
+              <div class="brief-meta" id="batch-meta"></div>
+            </div>
+            <div class="brief-batch-actions">
+              <button data-batch-action="pause">暂停</button>
+              <button data-batch-action="resume">继续</button>
+              <button class="danger" data-batch-action="cancel">中断</button>
+              <button data-batch-action="retry">重试未完成项</button>
+              <a id="batch-download" href="#">下载全部图片 ZIP</a>
+            </div>
+          </div>
+          <div class="brief-batch-path" id="batch-output-path"></div>
+        </div>
+        <div class="brief-batch-grid" id="batch-items"></div>
       </div>
     </main>
   </div>

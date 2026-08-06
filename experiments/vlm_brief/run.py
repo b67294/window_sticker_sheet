@@ -35,7 +35,8 @@ IMAGE_URL = "https://gptapi.longpean.com/gptImage/generateImageDirect"
 UPLOAD_URL = "https://stpic.longpean.com/picture/upLoadQiNiu"
 
 # luna 重试 2 次（共 3 attempts），然后依次回退。
-VLM_CHAIN = ["codex-gpt-5.6-luna"] * 3 + ["codex-gpt-5.6-sol", "codex-gpt-5.6-terra", "gpt-4o"]
+# 与 brief_lab.DEFAULT_VLM_CHAIN 保持一致：2026-08-06 起 codex-gpt-5.6-* 网关侧 502。
+VLM_CHAIN = ["codex-gpt-5.5", "codex-gpt-5.5", "gpt-4o", "gpt-4o", "codex-gpt-5.6-luna"]
 
 # 追加到每条衍生提示词后的固定生产约束（生图模型看不到原图，也看不到主工程 prompt）。
 PRODUCTION_SUFFIX = (

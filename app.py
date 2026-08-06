@@ -1252,6 +1252,39 @@ def download_slicer_run(run_id: str) -> FileResponse:
 
 BRIEF_DIR = APP_DIR / "brief_runs"
 _brief_lock = threading.RLock()
+_brief_batch_workers: set[str] = set()
+
+
+def _brief_batches_dir() -> Path:
+    return BRIEF_DIR / "_batches"
+
+
+def _brief_batch_dir(batch_id: str) -> Path:
+    return _brief_batches_dir() / batch_id
+
+
+def _brief_batch_meta_path(batch_id: str) -> Path:
+    return _brief_batch_dir(batch_id) / "batch.json"
+
+
+def _require_brief_batch(batch_id: str) -> Path:
+    if not re.fullmatch(r"brief-batch-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}", batch_id):
+        raise HTTPException(status_code=400, detail="无效的批量任务 ID")
+    directory = _brief_batch_dir(batch_id)
+    if not directory.is_dir():
+        raise HTTPException(status_code=404, detail="批量任务不存在")
+    return directory
+
+
+def _load_brief_batch(batch_id: str) -> dict[str, Any]:
+    with _brief_lock:
+        return json.loads(_brief_batch_meta_path(batch_id).read_text(encoding="utf-8"))
+
+
+def _save_brief_batch(batch_id: str, batch: dict[str, Any]) -> None:
+    with _brief_lock:
+        batch["updated_at"] = now_iso()
+        _save_json_with_unique_temp(_brief_batch_meta_path(batch_id), batch)
 
 
 def _brief_prompt_config_path() -> Path:
@@ -1266,6 +1299,7 @@ def _load_brief_prompt_config() -> dict[str, Any]:
         "core_prompt": base_parts["core_prompt"],
         "product_prompt": base_parts["product_prompt"],
         "layouts": {item["id"]: item["text"] for item in base_styles},
+        "frames": {item["id"]: item["prompt_constraint"] for item in brief_lab.brief_frames()},
     }
     path = _brief_prompt_config_path()
     if path.is_file():
@@ -1274,11 +1308,12 @@ def _load_brief_prompt_config() -> dict[str, Any]:
             for key in ("innovation_prompt", "core_prompt", "product_prompt"):
                 if isinstance(saved.get(key), str):
                     config[key] = saved[key]
-            if isinstance(saved.get("layouts"), dict):
-                for style_id in config["layouts"]:
-                    value = saved["layouts"].get(style_id)
-                    if isinstance(value, str):
-                        config["layouts"][style_id] = value
+            for group in ("layouts", "frames"):
+                if isinstance(saved.get(group), dict):
+                    for item_id in config[group]:
+                        value = saved[group].get(item_id)
+                        if isinstance(value, str):
+                            config[group][item_id] = value
         except (OSError, ValueError, TypeError):
             pass
     return config
@@ -1294,15 +1329,22 @@ def _public_brief_prompt_config() -> dict[str, Any]:
     styles = brief_lab.brief_prompt_styles()
     for item in styles:
         item["text"] = config["layouts"].get(item["id"], item["text"])
+    frames = brief_lab.brief_frames()
+    for item in frames:
+        item["prompt_constraint"] = config["frames"].get(item["id"], item["prompt_constraint"])
     default_style = brief_lab.DEFAULT_BRIEF_LAYOUT
+    default_frame = brief_lab.DEFAULT_BRIEF_FRAME
     return {
         "innovation_prompt": config["innovation_prompt"],
         "styles": styles,
+        "frames": frames,
         "defaults": {
             "core_prompt": config["core_prompt"],
             "product_prompt": config["product_prompt"],
             "prompt_style": default_style,
             "layout_prompt": config["layouts"][default_style],
+            "frame_id": default_frame,
+            "frame_prompt": config["frames"][default_frame],
             "canvas_id": brief_lab.DEFAULT_BRIEF_CANVAS,
         },
     }
@@ -1313,12 +1355,17 @@ def _resolve_brief_compose_defaults(
     core_prompt: str | None,
     product_prompt: str | None,
     layout_prompt: str | None,
+    frame_id: str | None = None,
+    frame_prompt: str | None = None,
 ) -> dict[str, Any]:
     saved = _load_brief_prompt_config()
+    resolved_frame = (frame_id or brief_lab.DEFAULT_BRIEF_FRAME).strip()
     return {
         "core_prompt": saved["core_prompt"] if core_prompt is None else core_prompt,
         "product_prompt": saved["product_prompt"] if product_prompt is None else product_prompt,
         "layout_prompt": saved["layouts"].get(prompt_style) if layout_prompt is None else layout_prompt,
+        "frame_id": resolved_frame,
+        "frame_prompt": saved["frames"].get(resolved_frame) if frame_prompt is None else frame_prompt,
     }
 
 
@@ -1360,29 +1407,91 @@ def _brief_payload(run_id: str) -> dict[str, Any]:
     return meta
 
 
+def _sync_brief_batch_outputs(batch_id: str, run_id: str, item_number: int) -> None:
+    batch_dir = _brief_batch_dir(batch_id)
+    output_dir = batch_dir / "outputs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = BRIEF_DIR / run_id
+    run = _load_brief_meta(run_id)
+    source_stem = re.sub(r"[^0-9A-Za-z_-]+", "-", Path(run.get("source_name", run_id)).stem).strip("-")
+    source_stem = source_stem[:48] or f"item-{item_number:03d}"
+    outputs = []
+    for direction in run.get("directions", []):
+        images = direction.get("images", [])
+        if not images:
+            continue
+        source = run_dir / images[-1]
+        if not source.is_file():
+            continue
+        suffix = source.suffix.lower() or ".png"
+        name = f"{item_number:03d}-{source_stem}-direction-{direction['index']}{suffix}"
+        shutil.copy2(source, output_dir / name)
+        outputs.append(name)
+    batch = _load_brief_batch(batch_id)
+    output_map = batch.setdefault("output_files", {})
+    output_map[run_id] = outputs
+    _save_brief_batch(batch_id, batch)
+
+
+def _brief_batch_payload(batch_id: str, include_items: bool = True) -> dict[str, Any]:
+    batch = _load_brief_batch(batch_id)
+    batch["id"] = batch_id
+    output_files = [
+        name
+        for run_id in batch.get("run_ids", [])
+        for name in batch.get("output_files", {}).get(run_id, [])
+    ]
+    batch["output_urls"] = [
+        f"/api/brief/batches/{batch_id}/files/outputs/{name}" for name in output_files
+    ]
+    batch["download_url"] = f"/api/brief/batches/{batch_id}/download"
+    batch["output_directory"] = str((_brief_batch_dir(batch_id) / "outputs").resolve())
+    if include_items:
+        items = []
+        for run_id in batch.get("run_ids", []):
+            try:
+                items.append(_brief_payload(run_id))
+            except Exception:
+                continue
+        batch["items"] = items
+        batch["completed_items"] = sum(
+            1 for item in items
+            if item.get("status") == "ready"
+            and all(direction.get("status") == "done" for direction in item.get("directions", []))
+        )
+        batch["failed_items"] = sum(
+            1 for item in items
+            if item.get("status") == "failed"
+            or any(direction.get("status") == "failed" for direction in item.get("directions", []))
+        )
+    return batch
+
+
 def _run_brief_vlm(run_id: str) -> None:
     directory = BRIEF_DIR / run_id
     meta = _load_brief_meta(run_id)
     meta["status"] = "briefing"
     _save_brief_meta(run_id, meta)
     try:
-        result = brief_lab.call_vlm(
-            directory / meta["source_file"],
-            prompt=meta.get("innovation_prompt"),
-        )
+        try:
+            result = brief_lab.call_vlm(
+                directory / meta["source_file"],
+                prompt=meta.get("innovation_prompt"),
+            )
+        except brief_lab.VLMChainError as chain_error:
+            result = None
+            meta["fallback_reason"] = str(chain_error)[:1000]
         if result is None:
-            # 全部模型失败：兜底为“默认创新提示词 + 参考图 图生图”的单方向。
+            # 全部模型失败：兜底为“默认创新提示词 + 参考图 图生图”的三个差异化方向。
             meta["status"] = "ready"
             meta["vlm_model"] = None
             meta["fallback"] = True
-            meta["summary"] = "VLM 全部模型失败，已提供兜底默认创新提示词（生成时将附带参考图）。"
-            meta["directions"] = [{
-                "index": 1,
-                "direction": "兜底：默认创新提示词 + 参考图",
-                "prompt": brief_lab.FALLBACK_PROMPT,
-                "status": "idle",
-                "images": [],
-            }]
+            reason = meta.get("fallback_reason") or "VLM 全部模型失败"
+            meta["summary"] = (
+                "⚠ 未使用 VLM 反推：已降级为兜底的三个通用创新方向（生成时附带参考图做图生图）。\n"
+                f"失败原因：{reason}"
+            )
+            meta["directions"] = brief_lab.fallback_directions()
         else:
             model, content = result
             (directory / "brief.md").write_text(content, encoding="utf-8")
@@ -1433,7 +1542,7 @@ def _run_brief_generate(run_id: str, index: int, prompt: str, compose: dict[str,
             direction["last_prompt_file"] = f"derived-{index}-{stamp}-prompt.txt"
             direction["config_label"] = (
                 f"{brief_lab.BRIEF_LAYOUT_LABELS.get(compose.get('prompt_style'), compose.get('prompt_style'))}"
-                f" · {spec['label']} · {spec['generation_size']}"
+                f" · {spec.get('frame_label', '')} × {spec['label']} · {spec['generation_size']}"
             )
             direction["error"] = None
         else:
@@ -1447,8 +1556,20 @@ def _run_brief_generate(run_id: str, index: int, prompt: str, compose: dict[str,
     _save_brief_meta(run_id, meta)
 
 
-def _process_brief_run(run_id: str, auto_generate: bool, compose: dict[str, Any]) -> None:
-    _run_brief_vlm(run_id)
+def _process_brief_run(
+    run_id: str,
+    auto_generate: bool,
+    compose: dict[str, Any],
+    should_continue: Any = None,
+) -> None:
+    should_continue = should_continue or (lambda: True)
+    if not should_continue():
+        return
+    existing = _load_brief_meta(run_id)
+    if existing.get("status") != "ready" or not existing.get("directions"):
+        _run_brief_vlm(run_id)
+    if not should_continue():
+        return
     if not auto_generate:
         return
     meta = _load_brief_meta(run_id)
@@ -1459,16 +1580,57 @@ def _process_brief_run(run_id: str, auto_generate: bool, compose: dict[str, Any]
         item = next((entry for entry in current["directions"] if entry["index"] == direction["index"]), None)
         if item is None:
             continue
+        if item.get("status") == "done" and item.get("images"):
+            continue
+        if not should_continue():
+            return
         item["status"] = "generating"
+        item["error"] = None
         _save_brief_meta(run_id, current)
         _run_brief_generate(run_id, direction["index"], direction["prompt"], compose)
 
 
-def _run_brief_batch(run_ids: list[str], auto_generate: bool, compose: dict[str, Any]) -> None:
-    """批量串行处理：一次一张，避免并发打爆 VLM 和生图网关。"""
-    for run_id in run_ids:
+def _brief_batch_should_continue(batch_id: str) -> bool:
+    """暂停会阻塞在安全检查点；中断会在当前外部请求结束后返回 False。"""
+    while True:
+        batch = _load_brief_batch(batch_id)
+        if batch.get("cancel_requested"):
+            return False
+        if not batch.get("pause_requested"):
+            if batch.get("status") == "paused":
+                batch["status"] = "running"
+                _save_brief_batch(batch_id, batch)
+            return True
+        if batch.get("status") != "paused":
+            batch["status"] = "paused"
+            _save_brief_batch(batch_id, batch)
+        time.sleep(0.5)
+
+
+def _run_brief_batch(batch_id: str) -> None:
+    """批量串行处理：一次一张；暂停/中断在每个网络步骤之间生效。"""
+    batch = _load_brief_batch(batch_id)
+    batch["status"] = "running"
+    batch["started_at"] = batch.get("started_at") or now_iso()
+    _save_brief_batch(batch_id, batch)
+    run_ids = list(batch.get("run_ids", []))
+    auto_generate = bool(batch.get("auto_generate", True))
+    compose = dict(batch.get("compose", {}))
+    for item_number, run_id in enumerate(run_ids, start=1):
+        if not _brief_batch_should_continue(batch_id):
+            break
+        batch = _load_brief_batch(batch_id)
+        batch["current_run_id"] = run_id
+        batch["current_index"] = item_number
+        _save_brief_batch(batch_id, batch)
         try:
-            _process_brief_run(run_id, auto_generate, compose)
+            _process_brief_run(
+                run_id,
+                auto_generate,
+                compose,
+                should_continue=lambda: _brief_batch_should_continue(batch_id),
+            )
+            _sync_brief_batch_outputs(batch_id, run_id, item_number)
         except Exception as exc:  # noqa: BLE001
             try:
                 meta = _load_brief_meta(run_id)
@@ -1477,6 +1639,47 @@ def _run_brief_batch(run_ids: list[str], auto_generate: bool, compose: dict[str,
                 _save_brief_meta(run_id, meta)
             except Exception:
                 continue
+    batch = _load_brief_batch(batch_id)
+    batch["current_run_id"] = None
+    batch["current_index"] = None
+    if batch.get("cancel_requested"):
+        batch["status"] = "cancelled"
+    else:
+        items = [_load_brief_meta(run_id) for run_id in run_ids]
+        has_failure = any(
+            item.get("status") == "failed"
+            or any(direction.get("status") == "failed" for direction in item.get("directions", []))
+            for item in items
+        )
+        batch["status"] = "completed_with_errors" if has_failure else "completed"
+        batch["finished_at"] = now_iso()
+    _save_brief_batch(batch_id, batch)
+
+
+def _start_brief_batch_worker(batch_id: str) -> bool:
+    with _brief_lock:
+        if batch_id in _brief_batch_workers:
+            return False
+        _brief_batch_workers.add(batch_id)
+
+    def worker() -> None:
+        try:
+            _run_brief_batch(batch_id)
+        except Exception as exc:  # noqa: BLE001
+            try:
+                batch = _load_brief_batch(batch_id)
+                batch["status"] = "completed_with_errors"
+                batch["error"] = str(exc)[:500]
+                batch["finished_at"] = now_iso()
+                _save_brief_batch(batch_id, batch)
+            except Exception:
+                pass
+        finally:
+            with _brief_lock:
+                _brief_batch_workers.discard(batch_id)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return True
 
 
 def _create_brief_run_record(
@@ -1484,6 +1687,7 @@ def _create_brief_run_record(
     content: bytes,
     status: str,
     innovation_prompt_text: str | None = None,
+    batch_id: str | None = None,
 ) -> str:
     run_id = f"brief-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
     directory = BRIEF_DIR / run_id
@@ -1498,11 +1702,55 @@ def _create_brief_run_record(
         "innovation_prompt": (
             innovation_prompt_text or _load_brief_prompt_config()["innovation_prompt"]
         ).strip(),
+        "batch_id": batch_id,
         "status": status,
         "summary": "",
         "directions": [],
     })
     return run_id
+
+
+def recover_interrupted_brief_state() -> None:
+    """服务重启后，worker 线程已随进程消失；把残留的“进行中”状态标记为中断。
+
+    否则这些僵尸状态会让前端永远显示“队列进行中”，并持续空转轮询。
+    """
+    if not BRIEF_DIR.is_dir():
+        return
+    for path in BRIEF_DIR.glob("brief-*/meta.json"):
+        try:
+            meta = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        changed = False
+        if meta.get("status") in {"queued", "briefing"}:
+            meta["status"] = "interrupted"
+            meta["error"] = meta.get("error") or "服务重启中断了这次反推，可重新提交"
+            changed = True
+        for direction in meta.get("directions", []):
+            if direction.get("status") == "generating":
+                direction["status"] = "failed"
+                direction["error"] = "服务重启中断了这次生成，可重新生成"
+                changed = True
+        if changed:
+            _save_json_with_unique_temp(path, meta)
+    batches_dir = _brief_batches_dir()
+    if not batches_dir.is_dir():
+        return
+    for path in batches_dir.glob("brief-batch-*/batch.json"):
+        try:
+            batch = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if batch.get("status") in {"running", "queued", "pausing", "paused"}:
+            batch["status"] = "interrupted"
+            batch["current_run_id"] = None
+            batch["current_index"] = None
+            batch["error"] = batch.get("error") or "服务重启中断了这次批量，可点“重试未完成项”继续"
+            _save_json_with_unique_temp(path, batch)
+
+
+recover_interrupted_brief_state()
 
 
 @app.get("/brief")
@@ -1515,12 +1763,137 @@ def list_brief_runs() -> list[dict[str, Any]]:
     if not BRIEF_DIR.is_dir():
         return []
     runs = []
-    for path in sorted(BRIEF_DIR.glob("brief-*/meta.json"), reverse=True)[:20]:
+    for path in sorted(BRIEF_DIR.glob("brief-*/meta.json"), reverse=True)[:200]:
         try:
             runs.append(_brief_payload(path.parent.name))
         except Exception:
             continue
     return runs
+
+
+@app.get("/api/brief/batches")
+def list_brief_batches() -> list[dict[str, Any]]:
+    directory = _brief_batches_dir()
+    if not directory.is_dir():
+        return []
+    result = []
+    for path in sorted(directory.glob("brief-batch-*/batch.json"), reverse=True)[:200]:
+        try:
+            result.append(_brief_batch_payload(path.parent.name, include_items=True))
+        except Exception:
+            continue
+    return result
+
+
+@app.get("/api/brief/history/download")
+def download_brief_history() -> FileResponse:
+    archive = BRIEF_DIR / "history-generated-images.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for image_path in sorted(BRIEF_DIR.glob("brief-*/derived-*.png")):
+            bundle.write(image_path, f"{image_path.parent.name}/{image_path.name}")
+    return FileResponse(
+        archive,
+        media_type="application/zip",
+        filename="brief-history-generated-images.zip",
+    )
+
+
+@app.get("/api/brief/batches/{batch_id}")
+def get_brief_batch(batch_id: str) -> dict[str, Any]:
+    _require_brief_batch(batch_id)
+    return _brief_batch_payload(batch_id, include_items=True)
+
+
+@app.post("/api/brief/batches/{batch_id}/pause")
+def pause_brief_batch(batch_id: str) -> dict[str, Any]:
+    _require_brief_batch(batch_id)
+    batch = _load_brief_batch(batch_id)
+    if batch.get("status") in {"completed", "completed_with_errors", "cancelled"}:
+        raise HTTPException(status_code=409, detail="该批次已经结束，不能暂停")
+    batch["pause_requested"] = True
+    batch["status"] = "pausing" if batch_id in _brief_batch_workers else "paused"
+    _save_brief_batch(batch_id, batch)
+    return _brief_batch_payload(batch_id)
+
+
+@app.post("/api/brief/batches/{batch_id}/resume")
+def resume_brief_batch(batch_id: str) -> dict[str, Any]:
+    _require_brief_batch(batch_id)
+    batch = _load_brief_batch(batch_id)
+    if batch.get("status") in {"completed", "completed_with_errors", "cancelled"}:
+        raise HTTPException(status_code=409, detail="该批次已经结束，请使用重试")
+    batch["pause_requested"] = False
+    batch["status"] = "running" if batch_id in _brief_batch_workers else "queued"
+    _save_brief_batch(batch_id, batch)
+    _start_brief_batch_worker(batch_id)
+    return _brief_batch_payload(batch_id)
+
+
+@app.post("/api/brief/batches/{batch_id}/cancel")
+def cancel_brief_batch(batch_id: str) -> dict[str, Any]:
+    _require_brief_batch(batch_id)
+    batch = _load_brief_batch(batch_id)
+    if batch.get("status") in {"completed", "completed_with_errors", "cancelled"}:
+        return _brief_batch_payload(batch_id)
+    batch["cancel_requested"] = True
+    batch["pause_requested"] = False
+    batch["status"] = "cancelling" if batch_id in _brief_batch_workers else "cancelled"
+    _save_brief_batch(batch_id, batch)
+    return _brief_batch_payload(batch_id)
+
+
+@app.post("/api/brief/batches/{batch_id}/retry")
+def retry_brief_batch(batch_id: str) -> dict[str, Any]:
+    _require_brief_batch(batch_id)
+    if batch_id in _brief_batch_workers:
+        raise HTTPException(status_code=409, detail="批次仍在运行，请先中断并等待当前步骤结束")
+    batch = _load_brief_batch(batch_id)
+    for run_id in batch.get("run_ids", []):
+        try:
+            run = _load_brief_meta(run_id)
+        except Exception:
+            continue
+        if run.get("status") == "failed" or not run.get("directions"):
+            run["status"] = "queued"
+            run["error"] = None
+            run["directions"] = []
+        else:
+            for direction in run.get("directions", []):
+                if direction.get("status") != "done":
+                    direction["status"] = "idle"
+                    direction["error"] = None
+        _save_brief_meta(run_id, run)
+    batch["pause_requested"] = False
+    batch["cancel_requested"] = False
+    batch["status"] = "queued"
+    batch["attempt"] = int(batch.get("attempt", 1)) + 1
+    batch["finished_at"] = None
+    _save_brief_batch(batch_id, batch)
+    _start_brief_batch_worker(batch_id)
+    return _brief_batch_payload(batch_id)
+
+
+@app.get("/api/brief/batches/{batch_id}/files/{file_path:path}")
+def get_brief_batch_file(batch_id: str, file_path: str) -> FileResponse:
+    directory = _require_brief_batch(batch_id).resolve()
+    target = (directory / file_path).resolve()
+    if directory not in target.parents or not target.is_file():
+        raise HTTPException(status_code=404, detail="批次文件不存在")
+    media_type, _ = mimetypes.guess_type(target.name)
+    return FileResponse(target, media_type=media_type)
+
+
+@app.get("/api/brief/batches/{batch_id}/download")
+def download_brief_batch(batch_id: str) -> FileResponse:
+    directory = _require_brief_batch(batch_id)
+    output_dir = directory / "outputs"
+    archive = directory / f"{batch_id}-images.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        if output_dir.is_dir():
+            for image_path in sorted(output_dir.iterdir()):
+                if image_path.is_file():
+                    bundle.write(image_path, f"outputs/{image_path.name}")
+    return FileResponse(archive, media_type="application/zip", filename=archive.name)
 
 
 @app.get("/api/brief/{run_id}")
@@ -1558,15 +1931,17 @@ async def create_brief_batch(
     auto_generate: bool = Form(True),
     prompt_style: str = Form(brief_lab.DEFAULT_BRIEF_LAYOUT),
     canvas_id: str = Form(brief_lab.DEFAULT_BRIEF_CANVAS),
+    frame_id: str | None = Form(None),
     core_prompt: str | None = Form(None),
     product_prompt: str | None = Form(None),
     layout_prompt: str | None = Form(None),
+    frame_prompt: str | None = Form(None),
     innovation_prompt: str | None = Form(None),
 ) -> dict[str, Any]:
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传一张图片")
     saved_compose = _resolve_brief_compose_defaults(
-        prompt_style, core_prompt, product_prompt, layout_prompt,
+        prompt_style, core_prompt, product_prompt, layout_prompt, frame_id, frame_prompt,
     )
     compose = {
         "prompt_style": prompt_style,
@@ -1579,16 +1954,36 @@ async def create_brief_batch(
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     uploads = [await _read_brief_upload(file) for file in files]
+    batch_id = f"brief-batch-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    batch_directory = _brief_batch_dir(batch_id)
+    (batch_directory / "outputs").mkdir(parents=True, exist_ok=True)
     run_ids = [
-        _create_brief_run_record(file_name, content, "queued", innovation_prompt)
+        _create_brief_run_record(
+            file_name,
+            content,
+            "queued",
+            innovation_prompt,
+            batch_id=batch_id,
+        )
         for file_name, content in uploads
     ]
-    threading.Thread(
-        target=_run_brief_batch,
-        args=(run_ids, auto_generate, compose),
-        daemon=True,
-    ).start()
-    return {"ids": run_ids, "total": len(run_ids), "auto_generate": auto_generate}
+    _save_brief_batch(batch_id, {
+        "created_at": now_iso(),
+        "status": "queued",
+        "auto_generate": auto_generate,
+        "compose": compose,
+        "run_ids": run_ids,
+        "source_names": [file_name for file_name, _ in uploads],
+        "total": len(run_ids),
+        "attempt": 1,
+        "pause_requested": False,
+        "cancel_requested": False,
+        "current_run_id": None,
+        "current_index": None,
+        "output_files": {},
+    })
+    _start_brief_batch_worker(batch_id)
+    return {**_brief_batch_payload(batch_id), "ids": run_ids}
 
 
 class BriefGenerateRequest(BaseModel):
@@ -1596,24 +1991,29 @@ class BriefGenerateRequest(BaseModel):
     prompt: str
     prompt_style: str = brief_lab.DEFAULT_BRIEF_LAYOUT
     canvas_id: str = brief_lab.DEFAULT_BRIEF_CANVAS
+    frame_id: str | None = None
     core_prompt: str | None = None
     product_prompt: str | None = None
     layout_prompt: str | None = None
+    frame_prompt: str | None = None
 
 
 class BriefPromptPreviewRequest(BaseModel):
     prompt: str
     prompt_style: str = brief_lab.DEFAULT_BRIEF_LAYOUT
     canvas_id: str = brief_lab.DEFAULT_BRIEF_CANVAS
+    frame_id: str | None = None
     core_prompt: str | None = None
     product_prompt: str | None = None
     layout_prompt: str | None = None
+    frame_prompt: str | None = None
 
 
 class BriefPromptDefaultSaveRequest(BaseModel):
-    field: Literal["innovation_prompt", "core_prompt", "product_prompt", "layout_prompt"]
+    field: Literal["innovation_prompt", "core_prompt", "product_prompt", "layout_prompt", "frame_prompt"]
     value: str
     prompt_style: str | None = None
+    frame_id: str | None = None
 
 
 class BriefDirectionPromptSaveRequest(BaseModel):
@@ -1631,6 +2031,11 @@ def save_brief_prompt_default(request: BriefPromptDefaultSaveRequest) -> dict[st
         if style_id not in config["layouts"]:
             raise HTTPException(status_code=400, detail="未知版式，无法保存 Prompt")
         config["layouts"][style_id] = value
+    elif request.field == "frame_prompt":
+        frame_id = (request.frame_id or "").strip()
+        if frame_id not in config["frames"]:
+            raise HTTPException(status_code=400, detail="未知分栏骨架，无法保存 Prompt")
+        config["frames"][frame_id] = value
     else:
         config[request.field] = value
     config["updated_at"] = now_iso()
@@ -1666,6 +2071,8 @@ def preview_brief_prompt(request: BriefPromptPreviewRequest) -> dict[str, Any]:
         request.core_prompt,
         request.product_prompt,
         request.layout_prompt,
+        request.frame_id,
+        request.frame_prompt,
     )
     compose = {
         **saved_compose,
@@ -1694,6 +2101,8 @@ def generate_brief_direction(run_id: str, request: BriefGenerateRequest) -> dict
         request.core_prompt,
         request.product_prompt,
         request.layout_prompt,
+        request.frame_id,
+        request.frame_prompt,
     )
     compose = {
         "prompt_style": request.prompt_style,
@@ -1740,8 +2149,10 @@ def defaults() -> dict[str, Any]:
             for style in list_prompt_styles()
         ],
         "brief_prompt_styles": brief_prompts["styles"],
+        "brief_window_frames": brief_prompts["frames"],
         "brief_prompt_defaults": brief_prompts["defaults"],
         "brief_innovation_prompt": brief_prompts["innovation_prompt"],
+        "brief_history_directory": str(BRIEF_DIR.resolve()),
         "brief_default_canvas_id": brief_lab.DEFAULT_BRIEF_CANVAS,
         "default_prompt_style": settings.get("prompt_style", "scene"),
         "window_templates": public_window_templates(),
